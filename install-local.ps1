@@ -2,7 +2,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File install-local.ps1
 $ErrorActionPreference = 'Stop'
 
-$pkgName = '@spartaattack/dsh-whale-copilot'
+$pkgName = 'dsh-whale-copilot'
 $src = Join-Path $PSScriptRoot '.'
 $userHome = $env:USERPROFILE
 $profileRoot = Join-Path $userHome '.dsh\profiles'
@@ -21,14 +21,14 @@ Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $pkgDir '.g
 Write-Host "==> [2/3] declare dependency in $webDir\package.json"
 $pkgJson = Join-Path $webDir 'package.json'
 $text = Get-Content $pkgJson -Raw
-if ($text -match [regex]::Escape('"@spartaattack/dsh-whale-copilot"')) {
+if ($text -match [regex]::Escape('"dsh-whale-copilot"')) {
   Write-Host '    dependency already present, skip'
 } else {
   $needle = '"dependencies": {}'
   if ($text.Contains($needle)) {
-    $text = $text.Replace($needle, '"dependencies": { "@spartaattack/dsh-whale-copilot": "^0.2.0" }')
+    $text = $text.Replace($needle, '"dependencies": { "dsh-whale-copilot": "^1.0.1" }')
   } else {
-    $text = $text.Replace('"dependencies": {', '"dependencies": { "@spartaattack/dsh-whale-copilot": "^0.2.0",')
+    $text = $text.Replace('"dependencies": {', '"dependencies": { "dsh-whale-copilot": "^1.0.1",')
   }
   Set-Content -Path $pkgJson -Value $text -Encoding utf8NoBOM -NoNewline
   Write-Host '    dependency written'
@@ -37,17 +37,17 @@ if ($text -match [regex]::Escape('"@spartaattack/dsh-whale-copilot"')) {
 Write-Host "==> [3/3] append plugin row to $webDir\cordis.patch.yml"
 $patchFile = Join-Path $webDir 'cordis.patch.yml'
 $patch = Get-Content $patchFile -Raw
-if ($patch -match 'name:\s*''@spartaattack/dsh-whale-copilot''') {
+if ($patch -match 'name:\s*''dsh-whale-copilot''') {
   Write-Host '    plugin row already present, skip'
 } else {
   $insert = @'
 
-# DSWhale pet ( @spartaattack/dsh-whale-copilot ) - to disable, replace with:
+# DSWhale pet ( dsh-whale-copilot ) - to disable, replace with:
 # - id: whale
 #   disabled: true
 - insert:
     - id: whale
-      name: '@spartaattack/dsh-whale-copilot'
+      name: 'dsh-whale-copilot'
 '@
   $trimmed = $patch.TrimEnd()
   if ($trimmed -eq '[]') {

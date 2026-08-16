@@ -18,27 +18,67 @@
   由 `@deepseek-ai/dsh-client-modules` 自动注入 `window.__DSH_BOOT__` 并服务
   `/plugins/<包名>/client.js`。
 
-## 本地安装（本机 dsh）
+## 安装
+
+**装完即激活**——一条命令（需 pnpm）：
 
 ```powershell
-# 1) 把包放入 profile 的 node_modules（hoisted 存储）
-Copy-Item -Recurse dsh-whale-copilot "$env:USERPROFILE\.dsh\profiles\node_modules\@spartaattack\"
-
-# 2) 在 ~/.dsh/profiles/web/package.json 的 dependencies 里加一行（声明式，pnpm 等价物）
-#    "dependencies": { "@spartaattack/dsh-whale-copilot": "^0.2.0" }
-
-# 3) 把下面 insert 追加到 ~/.dsh/profiles/web/cordis.patch.yml 的数组里：
-#    - insert:
-#        - id: whale
-#          name: '@spartaattack/dsh-whale-copilot'
-
-# 4) 重启 dsh web
+dsh plugin --profile web add dsh-whale-copilot
 dsh web
 ```
 
-也可以直接运行本包附带的 `install-local.ps1`（自动完成 1–3 步）。
+`dsh plugin add` 把包装进 `~/.dsh/profiles/web/`，并因包声明了 `dsh.bundle.patch`
+而自动写入 `dsh.profile.bundles`；`dsh web` 启动时自动挂载 host 半区并注入浏览器半区，
+无需手动改任何文件。
 
-> 注：`dsh plugin --profile web add <包>` 需要 pnpm；本机未装 pnpm 时按上面手动安装即可。
+### 无 pnpm 的手动安装（本机开发）
+
+```powershell
+# 1) 把包放入 web profile 的 node_modules（hoisted 存储）
+Copy-Item -Recurse dsh-whale-copilot "$env:USERPROFILE\.dsh\profiles\web\node_modules\"
+
+# 2) 在 ~/.dsh/profiles/web/package.json 里声明依赖 + bundle 层：
+#    "dependencies": { "dsh-whale-copilot": "^1.0.1" },
+#    "dsh": { "profile": { "bundles": [..., "dsh-whale-copilot"] } }
+
+# 3) 重启
+dsh web
+```
+
+> Windows 本机开发也可运行 `install-local.ps1`（等价的手动安装，直接 insert 行方式）。
+
+## 疑难排查
+
+### `add` 装到了旧版本（如 1.0.0 而非 1.0.1）
+
+npm 上 `latest` 已是新版本，但 `dsh plugin add` 仍装旧版——通常是 profile 目录里
+已有的 `pnpm-lock.yaml` / `dependencies` 锁定了旧版本所致（此前装过旧版）。
+
+解决：显式指定版本重装。
+
+```powershell
+dsh plugin --profile web add dsh-whale-copilot@<版本>
+# 例如：dsh plugin --profile web add dsh-whale-copilot@1.0.1
+```
+
+若仍报 `No matching version`（pnpm 元数据缓存未刷新），加 `--prefer-online`，或先
+`remove` 再 `add`：
+
+```powershell
+dsh plugin --profile web add dsh-whale-copilot@1.0.1 --prefer-online
+# 或
+dsh plugin --profile web remove dsh-whale-copilot
+dsh plugin --profile web add dsh-whale-copilot@1.0.1
+```
+
+验证实际装到的版本：
+
+```powershell
+node -p "require(process.env.HOME + '/.dsh/profiles/web/node_modules/dsh-whale-copilot/package.json').version"
+```
+
+并确认 `~/.dsh/profiles/web/package.json` 的 `dsh.profile.bundles` 已包含
+`dsh-whale-copilot`（装完即激活的关键）。
 
 ## 随时开关
 
@@ -50,7 +90,7 @@ dsh web
 # disabled: false       # 重新开启（或删除该条目）
 ```
 
-彻底卸载：删除 insert 条目 + 删除 `@spartaattack/dsh-whale-copilot` 依赖与 node_modules 目录。
+彻底卸载：`dsh plugin --profile web remove dsh-whale-copilot`（或手动删除 `dsh-whale-copilot` 依赖、`dsh.profile.bundles` 里的条目与 node_modules 目录）。
 
 ## 面板设置
 
@@ -78,21 +118,20 @@ Host 半区通过 `approval/request` 瀑布事件观察权限审批：先记录�
 `dsh plugin --profile web add <包名>` 安装（需 pnpm）。包已按官方
 `dsh.client` / `dsh.bundle` 约定打包，未来若有市场，可直接被市场目录消费。
 
-包名采用 `@spartaattack/` 作用域：`@spartaattack` 即你的 npmjs 用户名，作用域包天然避开了
-全局命名冲突，且无需创建 org 即可在你的账号下发布（公开）。想用裸包名 `dsh-whale-copilot`
-也可以，但需该裸名在 npm 上未被占用。
+包名采用裸名 `dsh-whale-copilot`（无作用域）。发布前请先确认该裸名在 npm 上未被占用：
+`npm view dsh-whale-copilot`。裸名包默认公开可见，无需 `--access public`。
 
 ```powershell
 cd dsh-whale-copilot
 npm login                 # 用你的 npmjs 账号（spartaattack）登录
-npm publish --access public   # 作用域包公开可见（publishConfig 已默认 access: public）
+npm publish   # 裸名包默认公开，无需 --access public
 ```
 
 发布后任何装有 pnpm 的机器都能：
 
 ```powershell
-dsh plugin --profile web add @spartaattack/dsh-whale-copilot
-# 然后照上文把 insert 追加进 cordis.patch.yml 并重启
+dsh plugin --profile web add dsh-whale-copilot
+dsh web   # 装完即激活，无需手动改任何文件
 ```
 
 ## 技术要点

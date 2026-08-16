@@ -1,14 +1,15 @@
-# DSWhale plugin rows — merge this insert into your profile's cordis.patch.yml
-# (e.g. C:\Users\<you>\.dsh\profiles\web\cordis.patch.yml).
+# DSWhale bundle patch — declared by `dsh.bundle.patch` in package.json and applied
+# automatically as a profile layer by `dsh plugin --profile web add dsh-whale-copilot`
+# (no manual merge needed).
 #
 # One row is enough: the row mounts the host half from the package main, and
 # @deepseek-ai/dsh-client-modules automatically serves the browser half because
 # the package declares dsh.client: { platform: 'web' }.
 #
-# To disable without uninstalling, add below the insert:
+# To disable without uninstalling, disable the whale row in your profile's
+# cordis.patch.yml (it outranks this bundle layer):
 #   - id: whale
 #     disabled: true
-# To re-enable, set disabled: false (or remove that entry).
 - insert:
     - id: whale
-      name: '@spartaattack/dsh-whale-copilot'
+      name: 'dsh-whale-copilot'
