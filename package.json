@@ -1,0 +1,45 @@
+{
+  "name": "@spartaattack/dsh-whale-copilot",
+  "version": "0.2.0",
+  "description": "DSWhale Copilot — 一条由 DSH 事件驱动的 DeepSeek 蓝白小鲸鱼伙伴：随 agent 会话的思考/回复/工具执行/审批/完成等事件游泳、起伏、跳跃、间歇喷水，审批时暂停移动并喷水抖动，并带会话状态面板。A cute whale copilot for the DSH Web surface driven by agent session events.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "pet",
+    "whale",
+    "copilot",
+    "web"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitee.com/ElegantDevil/dsh_workspace.git"
+  }
+}
