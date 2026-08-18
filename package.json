@@ -43,6 +43,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://gitee.com/ElegantDevil/dsh_workspace.git"
+    "url": "https://github.com/Moveharder/dsh-whale-copilot.git"
+  },
+  "homepage": "https://github.com/Moveharder/dsh-whale-copilot",
+  "bugs": {
+    "url": "https://github.com/Moveharder/dsh-whale-copilot/issues"
   }
 }
