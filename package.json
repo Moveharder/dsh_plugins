@@ -43,10 +43,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Moveharder/dsh-whale-copilot.git"
+    "url": "https://github.com/Moveharder/dsh_plugins.git"
   },
-  "homepage": "https://github.com/Moveharder/dsh-whale-copilot",
+  "homepage": "https://github.com/Moveharder/dsh_plugins",
   "bugs": {
-    "url": "https://github.com/Moveharder/dsh-whale-copilot/issues"
+    "url": "https://github.com/Moveharder/dsh_plugins/issues"
   }
 }

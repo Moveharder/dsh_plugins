@@ -1,6 +1,6 @@
 # 🐳 DSWhale Copilot — dsh-whale-copilot
 
-[![npm version](https://img.shields.io/npm/v/dsh-whale-copilot?color=blue)](https://www.npmjs.com/package/dsh-whale-copilot) [![GitHub](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/Moveharder/dsh-whale-copilot)
+[![npm version](https://img.shields.io/npm/v/dsh-whale-copilot?color=blue)](https://www.npmjs.com/package/dsh-whale-copilot) [![GitHub](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/Moveharder/dsh_plugins)
 
 一条由 DSH 事件驱动的 DeepSeek 蓝白小鲸鱼宠物，运行在 DSH Web 界面底部。
 它会随 agent 会话状态游泳、起伏、跳跃、间歇喷水：思考（reasoning-delta）时间歇喷水、
