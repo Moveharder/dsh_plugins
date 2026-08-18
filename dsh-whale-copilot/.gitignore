@@ -1,0 +1,14 @@
+# dependencies
+node_modules/
+
+# npm pack / publish 产物
+*.tgz
+*.tar.gz
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
