@@ -161,6 +161,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(it)
     }
 
+    /// 纯信息（置灰）菜单项。
+    private func infoItem(_ title: String) -> NSMenuItem {
+        let it = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        it.isEnabled = false
+        return it
+    }
+
     private func statusText() -> String {
         if let p = serviceProcess, p.isRunning { return "DSH 服务：运行中（PID \(p.processIdentifier)）" }
         if stopping { return "DSH 服务：停止中…" }
@@ -173,6 +180,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let state = NSMenuItem(title: statusText(), action: nil, keyEquivalent: "")
         state.isEnabled = false
         m.addItem(state)
+        // dsh 路径信息行：便于确认当前生效/自动检测到的是哪个 dsh
+        if let dsh = resolvedDshPath() {
+            m.addItem(infoItem("dsh 路径：\(dsh.path)"))
+        } else {
+            m.addItem(infoItem("dsh 路径：未找到（请打开设置选择文件）"))
+        }
         m.addItem(.separator())
 
         if let p = serviceProcess, p.isRunning {
@@ -227,28 +240,95 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - 服务启停
 
+    /// 解析 dsh 路径：显式配置 → 标准默认 ~/.local/bin/dsh → 自动探测（PATH / homebrew / usr-local）。
     private func resolvedDshPath() -> URL? {
-        let raw = config.dshPath.isEmpty ? "\(home)/.local/bin/dsh" : config.dshPath
-        let p = (raw as NSString).expandingTildeInPath
-        return FileManager.default.fileExists(atPath: p) ? URL(fileURLWithPath: p) : nil
+        let cfg = config.dshPath.trimmingCharacters(in: .whitespaces)
+        var c: [String] = []
+        if !cfg.isEmpty { c.append(cfg) }
+        c.append("\(home)/.local/bin/dsh")
+        c += autoDshCandidates()
+        return firstExisting(c)
+    }
+
+    /// 纯自动探测（设置界面“留空 = 自动检测”预览用，不含已保存的显式配置）。
+    private func autoDetectedDshPath() -> URL? {
+        firstExisting(["\(home)/.local/bin/dsh"] + autoDshCandidates())
+    }
+
+    private func firstExisting(_ paths: [String]) -> URL? {
+        for p in paths {
+            let e = (p as NSString).expandingTildeInPath
+            if FileManager.default.fileExists(atPath: e) { return URL(fileURLWithPath: e) }
+        }
+        return nil
+    }
+
+    /// 自动探测候选：PATH ＋ 常见安装目录 ＋ nvm 各 node 版本的全局 bin。
+    private func autoDshCandidates() -> [String] {
+        var c: [String] = []
+        if let w = whichInPath("dsh") { c.append(w) }
+        c += ["/opt/homebrew/bin/dsh", "/usr/local/bin/dsh", "/usr/bin/dsh"]
+        c += nvmDshCandidates()
+        return c
+    }
+
+    /// 在 PATH 中查找命令（sh -c 'command -v …'，并补上 GUI 环境默认缺的目录）。
+    private func whichInPath(_ name: String) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", "command -v \(name) 2>/dev/null || command -v \(name).cmd 2>/dev/null"]
+        var env = ProcessInfo.processInfo.environment
+        let extra = "\(home)/.local/bin:\(home)/bin:\(home)/.npm-global/bin:\(home)/.npm/bin:\(home)/.node/bin:/opt/homebrew/bin:/usr/local/bin"
+        env["PATH"] = [extra, env["PATH"]].compactMap { $0 }.joined(separator: ":")
+        p.environment = env
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do {
+            try p.run()
+            p.waitUntilExit()
+            let s = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (s?.isEmpty ?? true) ? nil : s
+        } catch {
+            return nil
+        }
+    }
+
+    /// 按版本号降序返回 nvm 已安装的 node 版本目录（默认 ~/.nvm，支持 NVM_DIR）。
+    private func nvmVersionsDescending() -> [String] {
+        var roots = ["\(home)/.nvm"]
+        if let nd = ProcessInfo.processInfo.environment["NVM_DIR"], !nd.isEmpty {
+            let expanded = (nd as NSString).expandingTildeInPath
+            if expanded != roots[0] { roots.append(expanded) }
+        }
+        var out: [String] = []
+        for r in roots {
+            let dir = r + "/versions/node"
+            guard let vers = try? FileManager.default.contentsOfDirectory(atPath: dir) else { continue }
+            func ints(_ v: String) -> [Int] { String(v.dropFirst()).split(separator: ".").compactMap { Int($0) } }
+            func newer(_ a: String, _ b: String) -> Bool {  // 版本号降序
+                let x = ints(a), y = ints(b)
+                for i in 0..<max(x.count, y.count) {
+                    let l = i < x.count ? x[i] : 0
+                    let r = i < y.count ? y[i] : 0
+                    if l != r { return l > r }
+                }
+                return false
+            }
+            out += vers.filter { $0.hasPrefix("v") }.sorted(by: newer).map { dir + "/" + $0 }
+        }
+        return out
+    }
+
+    /// nvm 各 node 版本全局 bin 里的 dsh（`npm i -g @deepseek-ai/dsh` 且用 nvm 装 node 的场景）。
+    private func nvmDshCandidates() -> [String] {
+        nvmVersionsDescending().map { $0 + "/bin/dsh" }
     }
 
     private func nvmNode() -> URL? {
-        let dir = "\(home)/.nvm/versions/node"
-        guard let vers = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return nil }
-        func ints(_ v: String) -> [Int] { String(v.dropFirst()).split(separator: ".").compactMap { Int($0) } }
-        func newer(_ a: String, _ b: String) -> Bool {  // 版本号降序
-            let x = ints(a), y = ints(b)
-            for i in 0..<max(x.count, y.count) {
-                let l = i < x.count ? x[i] : 0
-                let r = i < y.count ? y[i] : 0
-                if l != r { return l > r }
-            }
-            return false
-        }
-        let sorted = vers.sorted(by: newer)
-        for v in sorted {
-            let p = dir + "/" + v + "/bin/node"
+        for v in nvmVersionsDescending() {
+            let p = v + "/bin/node"
             if FileManager.default.isExecutableFile(atPath: p) { return URL(fileURLWithPath: p) }
         }
         return nil
@@ -278,7 +358,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startService() {
         guard serviceProcess == nil, !stopping else { return }
         guard let dsh = resolvedDshPath() else {
-            notify("找不到 dsh：\((config.dshPath.isEmpty ? "\(home)/.local/bin/dsh" : config.dshPath))")
+            notify("找不到 dsh 可执行文件（设置→服务 可点「自动检测」或「浏览…」指定）")
             return
         }
         guard let node = resolvedNodePath() else {
@@ -481,6 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private weak var settingsDshField: NSTextField?
     private weak var settingsNodeField: NSTextField?
     private weak var settingsLogField: NSTextField?
+    private weak var settingsDshStatusLabel: NSTextField?
     private weak var settingsAutoOpenCheck: NSButton?
     private weak var settingsStopOnQuitCheck: NSButton?
     private weak var settingsStartOnLoginCheck: NSButton?
@@ -548,7 +629,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 0),
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 0),
             styleMask: [.titled, .closable], backing: .buffered, defer: false
         )
         win.title = "dsh 设置"
@@ -557,7 +638,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ---- 表单控件 ----
         let portField = makeField(String(config.port), placeholder: "默认 3080")
         portField.widthAnchor.constraint(greaterThanOrEqualToConstant: 210).isActive = true
-        let dshField = makeField(config.dshPath, placeholder: "默认 ~/.local/bin/dsh")
+        let dshField = makeField(config.dshPath, placeholder: "留空 = 自动检测")
+        dshField.widthAnchor.constraint(greaterThanOrEqualToConstant: 200).isActive = true
+        dshField.target = self
+        dshField.action = #selector(dshFieldEdited(_:))
+        let dshDetect = NSButton(title: "自动检测", target: self, action: #selector(detectDshAction(_:)))
+        dshDetect.bezelStyle = .rounded
+        dshDetect.font = .systemFont(ofSize: 12)
+        let dshBrowse = NSButton(title: "浏览…", target: self, action: #selector(browseDshAction(_:)))
+        dshBrowse.bezelStyle = .rounded
+        dshBrowse.font = .systemFont(ofSize: 12)
+        let dshStatus = NSTextField(labelWithString: "")
+        dshStatus.font = .systemFont(ofSize: 11)
+        dshStatus.lineBreakMode = .byTruncatingMiddle
+        dshStatus.setContentHuggingPriority(.defaultLow, for: .horizontal)
         let nodeField = makeField(config.nodePath, placeholder: "自动检测（nvm / homebrew）")
         let logField = makeField(config.logFile, placeholder: "日志文件路径")
 
@@ -571,8 +665,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             cb.setContentHuggingPriority(.required, for: .horizontal)
         }
 
-        // 记住引用，供“恢复默认”使用
+        // 记住引用，供“恢复默认” / 路径状态刷新使用
         settingsPortField = portField; settingsDshField = dshField
+        settingsDshStatusLabel = dshStatus
         settingsNodeField = nodeField; settingsLogField = logField
         settingsAutoOpenCheck = autoOpen; settingsStopOnQuitCheck = stopOnQuit
         settingsStartOnLoginCheck = startOnLogin
@@ -605,9 +700,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         head.spacing = 10
 
         // ---- 卡片一：服务 ----
+        // dsh 路径行：标签 + 输入框 + 自动检测 + 浏览
+        let dshLabel = NSTextField(labelWithString: "dsh 路径")
+        dshLabel.font = .systemFont(ofSize: 13)
+        dshLabel.textColor = .secondaryLabelColor
+        dshLabel.alignment = .right
+        dshLabel.setContentHuggingPriority(.required, for: .horizontal)
+        dshLabel.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        let dshRow = NSStackView(views: [dshLabel, dshField, dshDetect, dshBrowse])
+        dshRow.orientation = .horizontal
+        dshRow.spacing = 8
+        dshRow.alignment = .centerY
+
+        // dsh 状态行（缩进与输入框对齐，显示当前生效路径）
+        let indent = NSView()
+        indent.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        let dshStatusRow = NSStackView(views: [indent, dshStatus])
+        dshStatusRow.orientation = .horizontal
+        dshStatusRow.alignment = .leading
+
         let serviceRows = NSStackView(views: [
             makeRow("端口", field: portField),
-            makeRow("dsh 路径", field: dshField),
+            dshRow,
+            dshStatusRow,
             makeRow("node 路径", field: nodeField),
             makeRow("日志文件", field: logField),
         ])
@@ -648,9 +763,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // ---- 根堆栈（20pt 左右边距，避免贴边） ----
         let root = NSStackView(views: [head, cardService, cardBehavior, footer, buttons])
         root.orientation = .vertical
-        root.alignment = .width
+        root.alignment = .leading
         root.spacing = 14
         root.edgeInsets = NSEdgeInsets(top: 16, left: 20, bottom: 16, right: 20)
+        // NSStackView 的 .width 对齐在固定宽度窗口里并不会让所有子视图等宽铺满，
+        // 这里显式把每个子视图宽度钉到根宽（减去左右边距），保证两张卡片等宽对齐。
+        for v in root.arrangedSubviews {
+            v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -40).isActive = true
+        }
 
         let wrap = NSView()
         wrap.addSubview(root)
@@ -685,11 +805,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         win.contentView = wrap
         win.layoutIfNeeded()
         let fit = root.fittingSize
-        win.setContentSize(NSSize(width: max(460.0, fit.width), height: fit.height + 8))
+        win.setContentSize(NSSize(width: max(560.0, fit.width), height: fit.height + 8))
         win.layoutIfNeeded()
         win.center()
 
         settingsWindow = win
+        updateDshStatus()
         win.makeKeyAndOrderFront(nil)
     }
 
@@ -697,6 +818,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func saveButtonClicked(_ sender: Any?) { saveClosure?() }
     @objc private func cancelSettings(_ sender: Any?) { settingsWindow?.orderOut(nil) }
+
+    // MARK: - 设置：dsh 路径辅助（自动检测 / 浏览 / 状态）
+
+    @objc private func dshFieldEdited(_ sender: Any?) { updateDshStatus() }
+
+    /// 自动检测并回填到输入框（保存后即为显式路径，后续运行更稳定）。
+    @objc private func detectDshAction(_ sender: Any?) {
+        guard let field = settingsDshField else { return }
+        if let url = autoDetectedDshPath() {
+            field.stringValue = url.path
+        } else {
+            field.stringValue = ""
+            notify("未找到 dsh，请确认已安装 DeepSeek Harness 后重试")
+        }
+        updateDshStatus()
+    }
+
+    /// 文件选择器：手动挑选 dsh 可执行文件。
+    @objc private func browseDshAction(_ sender: Any?) {
+        guard let window = settingsWindow, let field = settingsDshField else { return }
+        let panel = NSOpenPanel()
+        panel.title = "选择 dsh 可执行文件"
+        panel.message = "选择 dsh 命令对应的文件（通常为 ~/.local/bin/dsh）"
+        panel.prompt = "选择"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        if !field.stringValue.isEmpty {
+            let dir = URL(fileURLWithPath: (field.stringValue as NSString).expandingTildeInPath)
+                .deletingLastPathComponent()
+            if FileManager.default.fileExists(atPath: dir.path) { panel.directoryURL = dir }
+        }
+        panel.beginSheetModal(for: window) { [weak self] resp in
+            guard resp == .OK, let url = panel.url, let self = self else { return }
+            self.settingsDshField?.stringValue = url.path
+            self.updateDshStatus()
+        }
+    }
+
+    /// 根据当前输入框内容刷新 dsh 状态行（留空=自动检测，非空校验存在性）。
+    private func updateDshStatus() {
+        guard let field = settingsDshField, let label = settingsDshStatusLabel else { return }
+        let typed = field.stringValue.trimmingCharacters(in: .whitespaces)
+        var text: String
+        var color: NSColor
+        if typed.isEmpty {
+            if let url = autoDetectedDshPath() {
+                text = "当前生效：\(url.path)（自动检测）"
+                color = .labelColor
+            } else {
+                text = "未找到 dsh——启动服务将失败，请点「自动检测」或「浏览…」"
+                color = .systemRed
+            }
+        } else {
+            let e = (typed as NSString).expandingTildeInPath
+            if FileManager.default.fileExists(atPath: e) {
+                text = "当前生效：\(e)（手动设置）"
+                color = .labelColor
+            } else {
+                text = "路径不存在：\(e)"
+                color = .systemRed
+            }
+        }
+        label.stringValue = text
+        label.textColor = color
+        label.toolTip = text
+    }
 
     @objc private func restoreDefaults(_ sender: Any?) {
         config = Config()
@@ -707,6 +895,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsAutoOpenCheck?.state = Config().autoOpenBrowser ? .on : .off
         settingsStopOnQuitCheck?.state = Config().stopServiceOnQuit ? .on : .off
         settingsStartOnLoginCheck?.state = Config().autoStartServiceOnLogin ? .on : .off
+        updateDshStatus()
         notify("已恢复默认设置（点“保存”生效）")
     }
 
