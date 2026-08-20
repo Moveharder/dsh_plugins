@@ -13,4 +13,4 @@
 
 - 每个插件保持标准的 npm 包结构，放在本仓库同名子目录（`子目录名 = npm 包名`）下。
 - 版本发布与更新统一走开发工作区脚本 `scripts/publish-plugin.sh`
-  （**npm + GitHub 双渠道**，自动在镜像里 `git subtree` 挂载/合并并打标签）。
+  （**npm + GitHub 双渠道**，自动在镜像里 `git subtree` 挂载/合并并打标签）。| [dsh-bar](./dsh-bar/) | — | 1.0.0 | 顶部菜单栏小鲸鱼：启停 DSH Web、看状态/日志、开页面、设置端口/路径、开机自启 |
