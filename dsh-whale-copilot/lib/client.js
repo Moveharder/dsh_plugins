@@ -9,6 +9,10 @@ window.__ModuleLoader__.load({
     const name = "dsh-whale-copilot";
     const inject = [];
 
+    // ---- 插件 logo：dsh-dock 的鲸鱼剪影（base64 内嵌，随 bundle 一起加载，无额外请求）----
+    const WHALE_LOGO =
+      "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHhtbG5zOnhsaW5rPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5L3hsaW5rIiB3aWR0aD0iNTAuMDAwMDAwIiBoZWlnaHQ9IjUwLjAwMDAwMCIgdmlld0JveD0iMCAwIDUwIDUwIiBmaWxsPSJub25lIj4KCTxwYXRoIGlkPSJwYXRoIiBkPSJNNDguODM1NCAxMC4wNDc5QzQ4LjMyMzIgOS43OTE5OSA0OC4xMDI1IDEwLjI3OTggNDcuODAzMiAxMC41Mjc4QzQ3LjcwMDcgMTAuNjA3OSA0Ny42MTQzIDEwLjcxMTkgNDcuNTI3MyAxMC44MDc2QzQ2Ljc3OTMgMTEuNjI0IDQ1LjkwNDggMTIuMTU5NyA0NC43NjIyIDEyLjA5NTdDNDMuMDkyMyAxMiA0MS42NjYgMTIuNTM1NiA0MC40MDU4IDEzLjgzOThDNDAuMTM3NyAxMi4yMzE5IDM5LjI0NzYgMTEuMjcyIDM3Ljg5MjYgMTAuNjU1OEMzNy4xODM2IDEwLjMzNTkgMzYuNDY2OCAxMC4wMTU2IDM1Ljk3MDIgOS4zMTk4MkMzNS42MjM1IDguODIzNzMgMzUuNTI5MyA4LjI3MTk3IDM1LjM1NiA3LjcyNzU0QzM1LjI0NTYgNy4zOTk5IDM1LjEzNTMgNy4wNjM5NiAzNC43NjUxIDcuMDA3ODFDMzQuMzYzMyA2Ljk0Mzg1IDM0LjIwNTYgNy4yODc2IDM0LjA0NzkgNy41NzU2OEMzMy40MTggOC43NTE5NSAzMy4xNzMzIDEwLjA0NzkgMzMuMTk3MyAxMS4zNTk5QzMzLjI1MjQgMTQuMzEyIDM0LjQ3MzYgMTYuNjY0MSAzNi44OTk5IDE4LjMzNTlDMzcuMTc1OCAxOC41Mjc4IDM3LjI0NjYgMTguNzE5NyAzNy4xNTk3IDE5QzM2Ljk5NDYgMTkuNTc1NyAzNi43OTc0IDIwLjEzNTcgMzYuNjI0IDIwLjcxMTlDMzYuNTEzNyAyMS4wODAxIDM2LjM0ODYgMjEuMTU5NyAzNS45NjI0IDIxQzM0LjYzMDkgMjAuNDMyMSAzMy40ODEgMTkuNTkxOCAzMi40NjQ0IDE4LjU3NTdDMzAuNzM5MyAxNi44NzIxIDI5LjE3OTIgMTQuOTkxNyAyNy4yMzM0IDEzLjUyQzI2Ljc3NjQgMTMuMTc1OCAyNi4zMTkzIDEyLjg1NiAyNS44NDY3IDEyLjU1MThDMjMuODYxOCAxMC41ODQgMjYuMTA2OSA4Ljk2Nzc3IDI2LjYyNyA4Ljc3NTg4QzI3LjE3MDQgOC41NzU2OCAyNi44MTU5IDcuODg3NyAyNS4wNTkxIDcuODk2QzIzLjMwMjIgNy45MDM4MSAyMS42OTUzIDguNTAzOTEgMTkuNjQ3IDkuMzAzNzFDMTkuMzQ3NyA5LjQyMzgzIDE5LjAzMjIgOS41MTE3MiAxOC43MDk1IDkuNTgzOThDMTYuODUwMSA5LjIyMzYzIDE0LjkxOTkgOS4xNDM1NSAxMi45MDMzIDkuMzc1OThDOS4xMDU5NiA5LjgwNzYyIDYuMDcyNzUgMTEuNjM5NiAzLjg0MzI2IDE0Ljc2ODFDMS4xNjQ1NSAxOC41Mjc4IDAuNTM0MTggMjIuNzk5OCAxLjMwNjY0IDI3LjI1NTlDMi4xMTc2OCAzMS45NTIxIDQuNDY1ODIgMzUuODM5OCA4LjA3MzczIDM4Ljg3OTlDMTEuODE1OSA0Mi4wMzIyIDE2LjEyNTUgNDMuNTc2MiAyMS4wNDEgNDMuMjgwM0MyNC4wMjY5IDQzLjEwNCAyNy4zNTE2IDQyLjY5NjMgMzEuMTAxNiAzOS40NTYxQzMyLjA0NjkgMzkuOTM2IDMzLjAzOTYgNDAuMTI3OSAzNC42ODYgNDAuMjcyQzM1Ljk1NDYgNDAuMzkyMSAzNy4xNzU4IDQwLjIwOCAzOC4xMjExIDQwLjAwNzhDMzkuNjAyMSAzOS42ODggMzkuNDk5NSAzOC4yODgxIDM4Ljk2MzkgMzguMDMyMkMzNC42MjMgMzUuOTY3OCAzNS41NzYyIDM2LjgwODEgMzQuNzEgMzYuMTI3OUMzNi45MTU1IDMzLjQ2MzkgNDAuMjQwMiAzMC42OTU4IDQxLjU0IDIxLjcyOEM0MS42NDI2IDIxLjAxNjEgNDEuNTU1NyAyMC41Njc5IDQxLjU0IDE5Ljk5MTdDNDEuNTMyMiAxOS42Mzk2IDQxLjYxMDggMTkuNTAzOSA0Mi4wMDQ5IDE5LjQ2MzlDNDMuMDkyMyAxOS4zMzU5IDQ0LjE0NzkgMTkuMDMxNyA0NS4xMTY3IDE4LjQ4NzhDNDcuOTI5MiAxNi45MTk5IDQ5LjA2NCAxNC4zNDM4IDQ5LjMzMTUgMTEuMjU1OUM0OS4zNzExIDEwLjc4MzcgNDkuMzIzNyAxMC4yOTU5IDQ4LjgzNTQgMTAuMDQ3OVpNMjQuMzI2MiAzNy44Mzk4QzIwLjExOTYgMzQuNDYzOSAxOC4wNzkxIDMzLjM1MjEgMTcuMjM1OCAzMy4zOTk5QzE2LjQ0ODIgMzMuNDQ4MiAxNi41ODk4IDM0LjM2ODIgMTYuNzYzMiAzNC45Njc4QzE2Ljk0NDMgMzUuNTYwMSAxNy4xODEyIDM1Ljk2ODMgMTcuNTExNyAzNi40ODc4QzE3Ljc0MDIgMzYuODMyIDE3Ljg5NzkgMzcuMzQ0MiAxNy4yODMyIDM3LjcyOEMxNS45MjgyIDM4LjU4NCAxMy41NzI4IDM3LjQzOTkgMTMuNDYyNCAzNy4zODM4QzEwLjcyMDcgMzUuNzM1OCA4LjQyODIyIDMzLjU2MDEgNi44MTM0OCAzMC41ODRDNS4yNTM0MiAyNy43MTk3IDQuMzQ3NjYgMjQuNjQ3OSA0LjE5Nzc1IDIxLjM2NzdDNC4xNTgyIDIwLjU3NTcgNC4zODY3MiAyMC4yOTU5IDUuMTU4NjkgMjAuMTUxOUM2LjE3NTI5IDE5Ljk2IDcuMjIzMTQgMTkuOTE5OSA4LjIzOTI2IDIwLjA3MThDMTIuNTMyNyAyMC43MTE5IDE2LjE4ODUgMjIuNjcxOSAxOS4yNTI5IDI1Ljc3NTlDMjEuMDAyIDI3LjU0MzkgMjIuMzI1MiAyOS42NTU4IDIzLjY4ODUgMzEuNzIwMkMyNS4xMzc3IDMzLjkxMjEgMjYuNjk3OCAzNiAyOC42ODMxIDM3LjcxMTlDMjkuMzg0MyAzOC4zMTIgMjkuOTQzNCAzOC43NjgxIDMwLjQ3OSAzOS4xMDRDMjguODY0MyAzOS4yODgxIDI2LjE2OTkgMzkuMzI4MSAyNC4zMjYyIDM3LjgzOThaTTI2LjM0MzMgMjQuNjAwMUMyNi4zNDMzIDI0LjI0OCAyNi42MTkxIDIzLjk2NzggMjYuOTY1OCAyMy45Njc4QzI3LjA0NDQgMjMuOTY3OCAyNy4xMTUyIDIzLjk4MzkgMjcuMTc4MiAyNC4wMDc4QzI3LjI2NTEgMjQuMDQgMjcuMzQzOCAyNC4wODc5IDI3LjQwNjcgMjQuMTYwMkMyNy41MTcxIDI0LjI3MiAyNy41ODAxIDI0LjQzMjEgMjcuNTgwMSAyNC42MDAxQzI3LjU4MDEgMjQuOTUyMSAyNy4zMDQyIDI1LjIzMTkgMjYuOTU3NSAyNS4yMzE5QzI2LjYxMDggMjUuMjMxOSAyNi4zNDMzIDI0Ljk1MjEgMjYuMzQzMyAyNC42MDAxWk0zMi42MDY0IDI3Ljg3OTlDMzIuMjA0NiAyOC4wNDc5IDMxLjgwMjcgMjguMTkxOSAzMS40MTY1IDI4LjIwOEMzMC44MTc5IDI4LjIzOTcgMzAuMTY0MSAyNy45OTIyIDI5LjgwOTYgMjcuNjg4QzI5LjI1ODMgMjcuMjE1OCAyOC44NjQzIDI2Ljk1MjEgMjguNjk4NyAyNi4xMjc5QzI4LjYyNzkgMjUuNzc1OSAyOC42Njc1IDI1LjIzMTkgMjguNzMwNSAyNC45MTk5QzI4Ljg3MjEgMjQuMjQ4IDI4LjcxNDQgMjMuODE1OSAyOC4yNDk1IDIzLjQyMzhDMjcuODcxNiAyMy4xMDQgMjcuMzkxMSAyMy4wMTYxIDI2Ljg2MzMgMjMuMDE2MUMyNi42NjYgMjMuMDE2MSAyNi40ODQ5IDIyLjkyNzcgMjYuMzUxMSAyMi44NTZDMjYuMTMwNCAyMi43NDQxIDI1Ljk0OTIgMjIuNDYzOSAyNi4xMjI2IDIyLjEyMDFDMjYuMTc3NyAyMi4wMDc4IDI2LjQ0NTggMjEuNzM1OCAyNi41MDg4IDIxLjY4OEMyNy4yMjU2IDIxLjI3MiAyOC4wNTI3IDIxLjQwNzcgMjguODE2OSAyMS43MTk3QzI5LjUyNTkgMjIuMDE2MSAzMC4wNjE1IDIyLjU2MDEgMzAuODM0IDIzLjMyODFDMzEuNjIxNiAyNC4yNTU5IDMxLjc2MzIgMjQuNTExNyAzMi4yMTI0IDI1LjIwOEMzMi41NjY5IDI1Ljc1MiAzMi44OTAxIDI2LjMxMiAzMy4xMTA0IDI2Ljk1MjFDMzMuMjQ0NiAyNy4zNTIxIDMzLjA3MTMgMjcuNjgwMiAzMi42MDY0IDI3Ljg3OTlaIiBmaWxsPSIjMDAwIiBmaWxsLW9wYWNpdHk9IjEuMDAwMDAwIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz4KPC9zdmc+Cg==";
+
     function apply(ctx) {
       const slots = ctx.get("slots");
       if (!slots) return;
@@ -36,8 +40,8 @@ window.__ModuleLoader__.load({
 .dsw-act-celebrate .dsw-whale-bounce{animation:dsw-jump 2.3s ease-in-out 1;}
 .dsw-act-attention .dsw-whale-bounce{animation:dsw-jump 1.4s ease-in-out 1;}
 @keyframes dsw-jump{0%{transform:translateY(0) rotate(0)}18%{transform:translateY(-66px) rotate(-13deg)}38%{transform:translateY(-22px) rotate(7deg)}58%{transform:translateY(-74px) rotate(-9deg)}78%{transform:translateY(-14px) rotate(4deg)}100%{transform:translateY(0) rotate(0)}}
-.dsw-act-approval .dsw-whale-inner{animation:none;}
-.dsw-act-approval .dsw-whale-bounce{animation:dsw-shake .9s ease-in-out infinite;}
+.dsw-act-approval .dsw-whale-inner,.dsw-act-question .dsw-whale-inner{animation:none;}
+.dsw-act-approval .dsw-whale-bounce,.dsw-act-question .dsw-whale-bounce{animation:dsw-shake .9s ease-in-out infinite;}
 @keyframes dsw-shake{0%,100%{transform:translateX(0) rotate(0)}12%{transform:translateX(-7px) rotate(-3deg)}24%{transform:translateX(7px) rotate(3deg)}36%{transform:translateX(-6px) rotate(-2.5deg)}48%{transform:translateX(6px) rotate(2.5deg)}60%{transform:translateX(-4px) rotate(-1.5deg)}72%{transform:translateX(4px) rotate(1.5deg)}84%{transform:translateX(-2px) rotate(0)}100%{transform:translateX(0) rotate(0)}}
 .dsw-tail{animation:dsw-tail 1.6s ease-in-out infinite;transform-box:fill-box;transform-origin:85% 50%;}
 @keyframes dsw-tail{0%,100%{transform:rotate(-10deg)}50%{transform:rotate(12deg)}}
@@ -49,63 +53,118 @@ window.__ModuleLoader__.load({
 .dsw-act-sad .dsw-whale-inner{animation-duration:5.4s;}
 .dsw-spout{opacity:0;transform-box:fill-box;transform-origin:50% 100%;}
 .dsw-act-celebrate .dsw-spout,.dsw-act-attention .dsw-spout{animation:dsw-spout 1.6s ease-out 2;}
-.dsw-act-approval .dsw-spout{animation:dsw-spout 1.6s ease-out infinite;}
+.dsw-act-approval .dsw-spout,.dsw-act-question .dsw-spout{animation:dsw-spout 1.6s ease-out infinite;}
 @keyframes dsw-spout{0%{opacity:0;transform:scaleY(.1)}22%{opacity:1;transform:scaleY(1)}80%{opacity:.9}100%{opacity:0;transform:scaleY(1) translateY(-7px)}}
 .dsw-drop{opacity:0;}
 .dsw-act-celebrate .dsw-drop,.dsw-act-attention .dsw-drop{animation:dsw-drop 1.6s ease-in 2;}
-.dsw-act-approval .dsw-drop{animation:dsw-drop 1.6s ease-in infinite;}
+.dsw-act-approval .dsw-drop,.dsw-act-question .dsw-drop{animation:dsw-drop 1.6s ease-in infinite;}
 @keyframes dsw-drop{0%{opacity:0;transform:translateY(0)}30%{opacity:1}100%{opacity:0;transform:translateY(15px)}}
+/* 提问用琥珀色喷水，和审批（蓝色）区分开 */
+.dsw-act-question .dsw-spout path{fill:#fcd34d;}
+.dsw-act-question .dsw-spout .dsw-drop{fill:#f59e0b;}
 .dsw-act-thinking .dsw-spout{animation:dsw-think-spout 4s ease-in-out infinite;}
 .dsw-act-thinking .dsw-drop{animation:dsw-think-drop 4s ease-in infinite;}
 @keyframes dsw-think-spout{0%{opacity:0;transform:scaleY(.05)}8%{opacity:.85;transform:scaleY(.85)}20%{opacity:.65;transform:scaleY(1) translateY(-3px)}36%{opacity:0;transform:scaleY(1) translateY(-9px)}100%{opacity:0;transform:scaleY(.05)}}
 @keyframes dsw-think-drop{0%{opacity:0;transform:translateY(0)}16%{opacity:.85}40%{opacity:0;transform:translateY(15px)}100%{opacity:0}}
-.dsw-speech{position:absolute;bottom:90px;left:50%;transform:translateX(-52%);background:rgba(255,255,255,.96);color:#0f172a;font-size:13px;font-weight:600;padding:6px 12px;border-radius:14px;white-space:nowrap;box-shadow:0 4px 14px rgba(2,6,23,.28);pointer-events:none;animation:dsw-pop .22s ease-out;}
+.dsw-speech{position:absolute;bottom:90px;left:50%;transform:translateX(-52%);background:rgba(255,255,255,.96);color:#0f172a;font-size:13px;font-weight:600;padding:6px 12px;border-radius:14px;white-space:nowrap;box-shadow:0 4px 14px rgba(2,6,23,.28);pointer-events:none;animation:dsw-pop .22s ease-out;max-width:min(60vw,420px);overflow:hidden;text-overflow:ellipsis;}
 .dsw-speech::after{content:'';position:absolute;left:26%;bottom:-7px;border:7px solid transparent;border-top-color:rgba(255,255,255,.96);border-bottom:0;}
 @keyframes dsw-pop{from{transform:translateX(-52%) translateY(6px) scale(.8);opacity:0}to{transform:translateX(-52%) translateY(0) scale(1);opacity:1}}
 .dsw-badge{position:absolute;top:-10px;right:4px;min-width:22px;height:22px;border-radius:11px;background:linear-gradient(135deg,#f43f5e,#e11d48);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 6px;box-shadow:0 2px 8px rgba(225,29,72,.55);animation:dsw-pulse 1.2s ease-in-out infinite;pointer-events:none;}
+.dsw-badge-question{left:4px;right:auto;background:linear-gradient(135deg,#f59e0b,#d97706);box-shadow:0 2px 8px rgba(217,119,6,.55);}
 @keyframes dsw-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
-.dsw-panel{position:absolute;right:14px;bottom:178px;width:330px;max-width:calc(100vw - 28px);max-height:54vh;background:rgba(10,16,34,.94);border:1px solid rgba(148,163,184,.25);border-radius:16px;color:#e2e8f0;pointer-events:auto;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(2,6,23,.55);backdrop-filter:blur(8px);}
-.dsw-panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:13px;font-weight:700;border-bottom:1px solid rgba(148,163,184,.16);}
+/* ---- 状态面板：位置由 JS 按鲸鱼当前位置计算（跟随鲸鱼）---- */
+.dsw-panel{position:absolute;bottom:178px;width:330px;max-width:calc(100vw - 28px);max-height:54vh;background:var(--dsw-panel-bg);border:1px solid var(--dsw-panel-bd);border-radius:16px;color:var(--dsw-panel-tx);pointer-events:auto;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 18px 50px rgba(2,6,23,.55);backdrop-filter:blur(8px);
+  --dsw-panel-bg: rgba(10,16,34,.94);
+  --dsw-panel-bd: rgba(148,163,184,.25);
+  --dsw-panel-tx: #e2e8f0;
+  --dsw-panel-fg: #cbd5e1;
+  --dsw-panel-mut: #94a3b8;
+  --dsw-panel-sep: rgba(148,163,184,.16);
+  --dsw-panel-soft: rgba(148,163,184,.14);
+  --dsw-panel-inline: rgba(148,163,184,.13);
+  --dsw-panel-hover: rgba(148,163,184,.12);}
+.dsw-panel.dsw-theme-light{
+  --dsw-panel-bg: rgba(255,255,255,.97);
+  --dsw-panel-bd: rgba(15,23,42,.18);
+  --dsw-panel-tx: #0f172a;
+  --dsw-panel-fg: #334155;
+  --dsw-panel-mut: #64748b;
+  --dsw-panel-sep: rgba(15,23,42,.12);
+  --dsw-panel-soft: rgba(15,23,42,.07);
+  --dsw-panel-inline: rgba(15,23,42,.06);
+  --dsw-panel-hover: rgba(15,23,42,.06);}
+.dsw-panel-head{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:13px;font-weight:700;border-bottom:1px solid var(--dsw-panel-sep);}
+.dsw-panel-head .dsw-logo{display:inline-block;width:22px;height:22px;border-radius:7px;background:linear-gradient(135deg,#ffffff,#cfe2ff);padding:3px;box-shadow:inset 0 0 0 1px rgba(79,109,254,.4);flex:none;margin-right:8px;vertical-align:-5px;}
+.dsw-panel-head .dsw-logo img{width:100%;height:100%;display:block;}
 .dsw-panel-head .dsw-online{width:8px;height:8px;border-radius:50%;background:#34d399;display:inline-block;margin-right:7px;box-shadow:0 0 6px rgba(52,211,153,.8);}
 .dsw-panel-head .dsw-offline{background:#f87171;box-shadow:0 0 6px rgba(248,113,113,.8);}
 .dsw-panel-actions{display:flex;gap:6px;}
-.dsw-panel-gear,.dsw-panel-close{border:none;background:rgba(148,163,184,.14);color:#cbd5e1;width:24px;height:24px;border-radius:8px;cursor:pointer;font-size:12px;line-height:1;}
-.dsw-panel-gear:hover,.dsw-panel-close:hover{background:rgba(148,163,184,.3);}
+.dsw-panel-gear,.dsw-panel-close{border:none;background:var(--dsw-panel-soft);color:var(--dsw-panel-fg);width:24px;height:24px;border-radius:8px;cursor:pointer;font-size:12px;line-height:1;}
+.dsw-panel-gear:hover,.dsw-panel-close:hover{background:var(--dsw-panel-hover);}
 .dsw-panel-body{overflow-y:auto;padding:8px;}
-.dsw-settings{padding:8px 10px;border-bottom:1px solid rgba(148,163,184,.14);display:flex;flex-direction:column;gap:9px;}
+.dsw-settings{padding:8px 10px;border-bottom:1px solid var(--dsw-panel-sep);display:flex;flex-direction:column;gap:9px;}
 .dsw-settings-row{display:flex;align-items:center;gap:8px;font-size:12px;}
-.dsw-settings-label{flex:none;width:58px;color:#94a3b8;}
+.dsw-settings-label{flex:none;width:58px;color:var(--dsw-panel-mut);}
 .dsw-settings-row input[type=range]{flex:1;accent-color:#4d6bfe;min-width:0;}
-.dsw-settings-val{flex:none;width:72px;text-align:right;color:#cbd5e1;font-variant-numeric:tabular-nums;}
+.dsw-settings-val{flex:none;width:72px;text-align:right;color:var(--dsw-panel-fg);font-variant-numeric:tabular-nums;}
 .dsw-settings-reset{border:none;background:rgba(77,107,254,.22);color:#bcd0ff;font-size:11.5px;padding:4px 10px;border-radius:8px;cursor:pointer;align-self:flex-start;}
 .dsw-settings-reset:hover{background:rgba(77,107,254,.36);}
 .dsw-settings-ver .dsw-settings-val{width:auto;text-align:left;}
+.dsw-theme-toggle{display:flex;gap:5px;flex:1;}
+.dsw-theme-btn{flex:1;border:none;background:var(--dsw-panel-soft);color:var(--dsw-panel-mut);font-size:11.5px;padding:4px 0;border-radius:8px;cursor:pointer;}
+.dsw-theme-btn:hover{background:var(--dsw-panel-hover);}
+.dsw-theme-btn.dsw-theme-on{background:rgba(77,107,254,.88);color:#fff;font-weight:700;}
 .dsw-up{flex:none;font-size:11px;padding:2px 8px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;}
 .dsw-up-ok{color:#6ee7b7;background:rgba(52,211,153,.12);}
+.dsw-theme-light .dsw-up-ok{color:#059669;background:rgba(52,211,153,.16);}
 .dsw-up-new{color:#7dd3fc;background:rgba(56,189,248,.12);}
-.dsw-up-run{color:#94a3b8;background:rgba(148,163,184,.12);}
+.dsw-theme-light .dsw-up-new{color:#0369a1;background:rgba(56,189,248,.16);}
+.dsw-up-run{color:var(--dsw-panel-mut);background:var(--dsw-panel-soft);}
 .dsw-up-err{color:#fda4af;background:rgba(244,63,94,.12);}
+.dsw-theme-light .dsw-up-err{color:#be123c;background:rgba(244,63,94,.14);}
 .dsw-settings-upgrade{border:none;background:rgba(77,107,254,.22);color:#bcd0ff;font-size:11.5px;padding:4px 10px;border-radius:8px;cursor:pointer;flex:none;}
 .dsw-settings-upgrade:hover{background:rgba(77,107,254,.36);}
 .dsw-settings-upgrade:disabled{opacity:.55;cursor:default;}
 .dsw-session-list{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;}
 .dsw-session{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:10px;cursor:pointer;}
-.dsw-session:hover{background:rgba(148,163,184,.12);}
+.dsw-session:hover{background:var(--dsw-panel-hover);}
 .dsw-dot{width:9px;height:9px;border-radius:50%;flex:none;}
 .dsw-dot-idle{background:#64748b;}
 .dsw-dot-thinking{background:#38bdf8;box-shadow:0 0 7px rgba(56,189,248,.9);animation:dsw-pulse 1.6s ease-in-out infinite;}
 .dsw-dot-replying{background:#818cf8;}
 .dsw-dot-tool{background:#a78bfa;box-shadow:0 0 7px rgba(167,139,250,.9);}
 .dsw-dot-approval{background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,1);animation:dsw-pulse 1s ease-in-out infinite;}
-.dsw-session-name{flex:1;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#e2e8f0;}
-.dsw-phase{font-size:11px;color:#94a3b8;background:rgba(148,163,184,.13);border-radius:8px;padding:2px 7px;flex:none;}
-.dsw-empty{font-size:12px;color:#64748b;padding:8px 10px;}
-.dsw-feed-title{font-size:11px;color:#94a3b8;font-weight:700;padding:6px 4px;letter-spacing:.04em;}
-.dsw-feed{display:flex;flex-direction:column;gap:2px;border-top:1px solid rgba(148,163,184,.14);padding-top:6px;}
+.dsw-dot-question{background:#34d399;box-shadow:0 0 8px rgba(52,211,153,1);animation:dsw-pulse 1s ease-in-out infinite;}
+.dsw-session-name{flex:1;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-panel-tx);}
+.dsw-phase{font-size:11px;color:var(--dsw-panel-mut);background:var(--dsw-panel-inline);border-radius:8px;padding:2px 7px;flex:none;}
+.dsw-empty{font-size:12px;color:var(--dsw-panel-mut);padding:8px 10px;}
+.dsw-feed-title{font-size:11px;color:var(--dsw-panel-mut);font-weight:700;padding:6px 4px;letter-spacing:.04em;}
+.dsw-feed{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--dsw-panel-sep);padding-top:6px;}
 .dsw-feed-item{display:flex;align-items:center;gap:7px;padding:3px 4px;font-size:12px;}
 .dsw-feed-icon{flex:none;}
-.dsw-feed-text{flex:1;color:#cbd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.dsw-feed-time{flex:none;font-size:10.5px;color:#64748b;}
+.dsw-feed-text{flex:1;color:var(--dsw-panel-fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.dsw-feed-time{flex:none;font-size:10.5px;color:var(--dsw-panel-mut);}
+.dsw-check{display:flex;align-items:center;gap:4px;color:var(--dsw-panel-fg);cursor:pointer;font-size:12px;flex:1;justify-content:center;}
+.dsw-check input[type=checkbox]{accent-color:#4d6bfe;margin:0;}
+/* ---- 全浏览器醒目提醒：页缘闪屏 + 顶部 toast ---- */
+.dsw-alert{position:fixed;inset:0;z-index:1200;pointer-events:none;border:0 solid transparent;}
+.dsw-alert::before{content:'';position:absolute;inset:0;opacity:0;}
+.dsw-alert-approval{animation:dsw-alert-red 0.9s ease-in-out 4;}
+.dsw-alert-approval::before{background:radial-gradient(circle at 50% 30%,rgba(244,63,94,.25),transparent 62%);animation:dsw-alert-wash 0.9s ease-in-out 4;}
+.dsw-alert-question{animation:dsw-alert-amber 0.9s ease-in-out 4;}
+.dsw-alert-question::before{background:radial-gradient(circle at 50% 30%,rgba(245,158,11,.26),transparent 62%);animation:dsw-alert-wash 0.9s ease-in-out 4;}
+.dsw-alert-done{animation:dsw-alert-green 0.9s ease-in-out 4;}
+.dsw-alert-done::before{background:radial-gradient(circle at 50% 30%,rgba(52,211,153,.22),transparent 62%);animation:dsw-alert-wash 0.9s ease-in-out 4;}
+@keyframes dsw-alert-red{0%,100%{border-width:0;border-color:rgba(244,63,94,0)}25%,75%{border-width:14px;border-color:rgba(244,63,94,.65)}}
+@keyframes dsw-alert-amber{0%,100%{border-width:0;border-color:rgba(245,158,11,0)}25%,75%{border-width:14px;border-color:rgba(245,158,11,.7)}}
+@keyframes dsw-alert-green{0%,100%{border-width:0;border-color:rgba(52,211,153,0)}25%,75%{border-width:14px;border-color:rgba(52,211,153,.6)}}
+@keyframes dsw-alert-wash{0%,100%{opacity:0}30%,70%{opacity:1}}
+.dsw-alert-toast{position:fixed;top:18px;left:50%;transform:translateX(-50%);background:rgba(10,16,34,.95);color:#fff;font-size:14px;font-weight:700;padding:10px 18px;border-radius:14px;box-shadow:0 10px 30px rgba(2,6,23,.5);display:flex;flex-direction:column;gap:3px;align-items:center;pointer-events:none;z-index:1201;max-width:min(86vw,480px);text-align:center;animation:dsw-toast-in .25s ease-out;}
+.dsw-alert-approval .dsw-alert-toast{border:1px solid rgba(244,63,94,.65);}
+.dsw-alert-question .dsw-alert-toast{border:1px solid rgba(245,158,11,.7);}
+.dsw-alert-done .dsw-alert-toast{border:1px solid rgba(52,211,153,.65);}
+.dsw-alert-sub{font-size:12px;font-weight:500;color:#cbd5e1;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+@keyframes dsw-toast-in{from{transform:translateX(-50%) translateY(-14px);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
 `;
       document.head.appendChild(styleEl);
       // 注意：ctx.effect 的返回值才是清理函数（回调本身立即执行），
@@ -115,7 +174,7 @@ window.__ModuleLoader__.load({
       });
 
       // ---- 迷你 store：每次更新替换为新对象引用，确保 React 重渲染 ----
-      let state = { sessions: [], events: [], lastSeq: -1, connected: false, approvalCount: 0, version: null, latest: null, updateChecked: false, updateAvailable: false, upgrade: null }
+      let state = { sessions: [], events: [], lastSeq: -1, connected: false, approvalCount: 0, questionCount: 0, version: null, latest: null, updateChecked: false, updateAvailable: false, upgrade: null }
       const subs = new Set()
       function getState() { return state }
       function setState(patch) {
@@ -138,13 +197,18 @@ window.__ModuleLoader__.load({
           const merged = fresh.length ? state.events.concat(fresh).slice(-80) : state.events
           const sessions = Array.isArray(data.sessions) ? data.sessions : []
           let approvalCount = 0
-          for (const s of sessions) if (s && s.phase === "approval") approvalCount++
+          let questionCount = 0
+          for (const s of sessions) {
+            if (s && s.phase === "approval") approvalCount++
+            else if (s && s.phase === "question") questionCount++
+          }
           setState({
             sessions,
             events: merged,
             lastSeq: typeof data.seq === "number" ? data.seq : state.lastSeq,
             connected: true,
             approvalCount,
+            questionCount,
             version: typeof data.version === "string" ? data.version : state.version,
             latest: typeof data.latest === "string" ? data.latest : state.latest,
             updateChecked: !!data.updateChecked,
@@ -168,14 +232,15 @@ window.__ModuleLoader__.load({
         think: '💭', reply: '💬', tool: '⚒️', approval: '❓', approve: '✅', reject: '🚫',
         done: '🎉', error: '💥', task: '📥', sub: '🐋', 'sub-end': '🐳', workflow: '🔄',
         'workflow-done': '🎊', 'workflow-error': '💥', goal: '🎯', 'goal-done': '🏆',
-        'goal-blocked': '⛔', info: 'ℹ️'
+        'goal-blocked': '⛔', info: 'ℹ️', question: '❓', 'question-done': '✅'
       }
       const TEXTS = {
         think: '让我想想…', reply: '正在回复…', tool: (e) => (e.tool ? '正在使用 ' + e.tool : '正在执行动作'),
         approval: '需要审批！', approve: '批准啦！', reject: '被拒绝了…', done: '任务完成！',
         error: '呜哇，出错了…', task: '新任务来啦！', sub: '小助手开工！', 'sub-end': '小助手完成！',
         workflow: '工作流开始！', 'workflow-done': '工作流完成！', 'workflow-error': '工作流出错了…',
-        goal: '新目标达成！', 'goal-done': '目标完成！', info: '…'
+        goal: '新目标达成！', 'goal-done': '目标完成！', info: '…',
+        question: (e) => (e.ask ? '问题：' + e.ask : '想问你个问题！'), 'question-done': '收到你的回答！'
       }
 
       function shortId(id) {
@@ -188,6 +253,7 @@ window.__ModuleLoader__.load({
       function phaseLabel(s) {
         switch (s.phase) {
           case 'approval': return '待审批'
+          case 'question': return '提问中'
           case 'tool': return '执行 ' + (s.tool || '工具')
           case 'replying': return '回复中'
           case 'thinking': return '思考中'
@@ -195,9 +261,12 @@ window.__ModuleLoader__.load({
         }
       }
       function deriveBaseMood(sessions) {
-        let mood = 'idle'
         for (const s of sessions) {
           if (s.phase === 'approval') return 'approval'
+          if (s.phase === 'question') return 'question'
+        }
+        let mood = 'idle'
+        for (const s of sessions) {
           if (s.phase === 'tool') mood = 'tool'
           else if (s.phase === 'replying' && mood !== 'tool' && mood !== 'thinking') mood = 'replying'
           else if (s.phase === 'thinking' && mood === 'idle') mood = 'thinking'
@@ -220,7 +289,7 @@ window.__ModuleLoader__.load({
         }
         if (!hit) {
           for (const e of recent) {
-            if (e.mood === 'approval') { hit = e; break }
+            if (e.mood === 'approval' || e.mood === 'question') { hit = e; break }
           }
         }
         if (!hit) {
@@ -298,7 +367,7 @@ window.__ModuleLoader__.load({
       // ---- 设置持久化：写入 localStorage，刷新/下次启动自动恢复 ----
       const SETTINGS_KEY = 'dsh-whale-copilot:settings'
       const LEGACY_SETTINGS_KEY = 'dsh-whale:settings'
-      const DEFAULT_SETTINGS = { scale: 0.85, sink: 8, bubble: 90, opacity: 1 }
+      const DEFAULT_SETTINGS = { scale: 0.85, sink: 8, bubble: 90, opacity: 1, theme: 'dark', alertFlash: true, alertNotify: true, alertTitle: true }
       function clampNum(v, min, max, fallback) {
         return typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, v)) : fallback
       }
@@ -314,7 +383,11 @@ window.__ModuleLoader__.load({
                 scale: clampNum(parsed.scale, 0.5, 1.3, DEFAULT_SETTINGS.scale),
                 sink: clampNum(parsed.sink, -20, 22, DEFAULT_SETTINGS.sink),
                 bubble: clampNum(parsed.bubble, 40, 180, DEFAULT_SETTINGS.bubble),
-                opacity: clampNum(parsed.opacity, 0, 1, DEFAULT_SETTINGS.opacity)
+                opacity: clampNum(parsed.opacity, 0, 1, DEFAULT_SETTINGS.opacity),
+                theme: (parsed.theme === 'light' || parsed.theme === 'dark') ? parsed.theme : DEFAULT_SETTINGS.theme,
+                alertFlash: parsed.alertFlash === undefined ? DEFAULT_SETTINGS.alertFlash : !!parsed.alertFlash,
+                alertNotify: parsed.alertNotify === undefined ? DEFAULT_SETTINGS.alertNotify : !!parsed.alertNotify,
+                alertTitle: parsed.alertTitle === undefined ? DEFAULT_SETTINGS.alertTitle : !!parsed.alertTitle
               }
             }
           }
@@ -322,11 +395,19 @@ window.__ModuleLoader__.load({
         return defaultSettings()
       }
 
+      // 提醒文案元信息（按事件 kind 区分：审批/提问/任务完成）
+      const ALERT_META = {
+        approval: { marker: '需要审批', title: '⚠️ 需要审批！', heading: '⚠️ 需要审批', fallback: '需要审批！' },
+        question: { marker: '提问', title: '❓ 有提问待回答！', heading: '❓ 鲸鱼想问你', fallback: '鲸鱼想问你个问题' },
+        done: { marker: '任务完成', title: '🎉 任务完成！', heading: '🎉 任务完成', fallback: '任务完成！' }
+      }
+
       function WhaleApp() {
         const [data, setData] = React.useState(getState)
         React.useEffect(() => subscribe(setData), [])
         const [panel, setPanel] = React.useState(false)
         const [showSettings, setShowSettings] = React.useState(false)
+        const [panelLeft, setPanelLeft] = React.useState(null)
         const [settings, setSettings] = React.useState(loadSettings)
         React.useEffect(() => {
           try { window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)) } catch (e) { /* ignore */ }
@@ -338,7 +419,7 @@ window.__ModuleLoader__.load({
         const lastCelebrateRef = React.useRef(0)
         const whaleElRef = React.useRef(null)
         // 游动的唯一状态源：pos 当前水平位置、dir 行进方向(+1 右 / -1 左)、
-        // frozen 审批冻结标志。朝向与位移都由它驱动，保证身体与头部始终同步。
+        // frozen 审批/提问冻结标志。朝向与位移都由它驱动，保证身体与头部始终同步。
         const swimRef = React.useRef({ pos: 8, dir: 1, frozen: false, last: 0, raf: 0, prevDir: 1 })
 
         function clearActionTimer() {
@@ -349,9 +430,73 @@ window.__ModuleLoader__.load({
         }
         React.useEffect(() => () => { clearActionTimer() }, [])
 
+        // ---- 全浏览器醒目提醒（审批 / 提问）----
+        const [alert, setAlert] = React.useState(null)
+        const alertTimerRef = React.useRef(null)
+        const notifyAskedRef = React.useRef(false)
+        const baseTitleRef = React.useRef(null)
+        function clearAlertTimer() {
+          if (alertTimerRef.current !== null) {
+            try { clearTimeout(alertTimerRef.current) } catch (e) { /* ignore */ }
+            alertTimerRef.current = null
+          }
+        }
+        // 在用户手势（点击鲸鱼）时请求通知权限，只主动请求一次
+        function requestNotifyPermission() {
+          try {
+            if (!window.Notification || notifyAskedRef.current) return
+            notifyAskedRef.current = true
+            if (Notification.permission === 'default') {
+              Notification.requestPermission().catch(() => { /* 拒绝/被忽略则静默降级为页缘闪屏 */ })
+            }
+          } catch (e) { /* ignore */ }
+        }
+        function restoreBaseTitle() {
+          if (baseTitleRef.current !== null) {
+            try { document.title = baseTitleRef.current } catch (e) { /* ignore */ }
+            baseTitleRef.current = null
+          }
+        }
+        function emitAlert(kind, text, key) {
+          const meta = ALERT_META[kind] || ALERT_META.question
+          if (!text) text = meta.fallback
+          // 1) 页缘闪屏 + 顶部 toast（无需权限，最可靠）
+          if (settings.alertFlash) setAlert({ kind, text, key: (key !== undefined ? key : Date.now()) })
+          // 2) 系统级原生通知（整个浏览器/系统弹窗；需已授权）
+          if (settings.alertNotify) {
+            try {
+              if (window.Notification && Notification.permission === 'granted') {
+                const n = new Notification('🐳 DSWhale', {
+                  body: text, tag: 'dsw-alert-' + kind, icon: WHALE_LOGO, renotify: true
+                })
+                try { setTimeout(() => { try { n.close() } catch (e) { /* ignore */ } }, 8000) } catch (e) { /* ignore */ }
+              }
+            } catch (e) { /* ignore */ }
+          }
+          // 3) 浏览器标签栏闪烁（临时改 document.title 前缀）
+          if (settings.alertTitle) {
+            try {
+              if (baseTitleRef.current === null) baseTitleRef.current = document.title
+              if (document.title.indexOf(meta.marker) === -1) {
+                document.title = meta.title + ' ' + baseTitleRef.current
+              }
+            } catch (e) { /* ignore */ }
+          }
+          clearAlertTimer()
+          alertTimerRef.current = setTimeout(() => {
+            alertTimerRef.current = null
+            setAlert(null)
+            restoreBaseTitle()
+          }, 4500)
+        }
+        React.useEffect(() => () => {
+          clearAlertTimer()
+          restoreBaseTitle()
+        }, [])
+
         // ---- 游动循环：JS 驱动水平位移与头部朝向（单一数据源）----
         // 相比旧的「两条独立 92s CSS 动画（游泳 + 掉头）」方案，位移与朝向由同一个
-        // swimRef 状态驱动：审批时一次性完全冻结，杜绝「身体停了、头还在转」的失步。
+        // swimRef 状态驱动：审批/提问时一次性完全冻结，杜绝「身体停了、头还在转」的失步。
         React.useEffect(() => {
           const whale = whaleElRef.current
           if (!whale) return
@@ -372,7 +517,7 @@ window.__ModuleLoader__.load({
             s.raf = requestAnimationFrame(frame)
             const delta = s.last ? ts - s.last : 0
             s.last = ts
-            if (s.frozen) return // 审批中：位移进度完全停止
+            if (s.frozen) return // 审批/提问中：位移进度完全停止
             s.pos += s.dir * SPEED * delta
             const max = maxX()
             if (s.pos >= max) { s.pos = max; s.dir = -1 }
@@ -414,6 +559,10 @@ window.__ModuleLoader__.load({
           const next = pickAction(data.events, lastSeqRef.current)
           lastSeqRef.current = data.lastSeq
           if (!next) return
+          // 审批 / 提问 / 任务完成 到达 → 全浏览器醒目提醒（仅新事件触发一次）
+          if (next.kind === 'approval') emitAlert('approval', next.text, next.key)
+          else if (next.kind === 'question') emitAlert('question', next.text, next.key)
+          else if (next.kind === 'done') emitAlert('done', next.text, next.key)
           let chosen = next
           if (next.type === 'celebrate' && Date.now() - lastCelebrateRef.current < 6000) {
             chosen = { key: next.key + ':t', type: 'talk', text: next.text, kind: next.kind }
@@ -427,16 +576,16 @@ window.__ModuleLoader__.load({
         }, [data])
 
         const mood = deriveBaseMood(data.sessions)
-        // ---- 审批冻结：回到最左侧并完全静止 ----
-        // 1) 避免鲸鱼停在页面中部/右侧遮挡 DSH 的审批按钮；
-        // 2) 位移与朝向一并冻结（同一状态源），审批结束后恢复时方向一致、无跳变。
-        const isApproval = mood === 'approval'
+        // ---- 审批/提问冻结：回到最左侧并完全静止 ----
+        // 1) 避免鲸鱼停在页面中部/右侧遮挡 DSH 的审批按钮/提问弹层；
+        // 2) 位移与朝向一并冻结（同一状态源），恢复时方向一致、无跳变。
+        const isFrozen = mood === 'approval' || mood === 'question'
         React.useEffect(() => {
           const s = swimRef.current
           const whale = whaleElRef.current
-          s.frozen = isApproval
+          s.frozen = isFrozen
           if (!whale) return
-          if (isApproval) {
+          if (isFrozen) {
             s.pos = 8
             s.dir = 1
             s.prevDir = 1
@@ -447,14 +596,49 @@ window.__ModuleLoader__.load({
           } else {
             s.last = 0 // 恢复游动时重置时间基准，避免突发大位移
           }
-        }, [isApproval])
+        }, [isFrozen])
         const actClass = action && action.type !== 'talk'
           ? ' dsw-act-' + action.type
-          : (mood === 'thinking' ? ' dsw-act-thinking' : (mood === 'approval' ? ' dsw-act-approval' : ''))
-        const speechText = action ? action.text : (mood === 'approval' ? '需要审批！' : null)
+          : (mood === 'thinking' ? ' dsw-act-thinking'
+            : (mood === 'approval' || mood === 'question' ? ' dsw-act-' + mood : ''))
+        const speechText = action
+          ? action.text
+          : (mood === 'approval' ? '需要审批！'
+            : (mood === 'question' ? '想问你个问题！' : null))
         const speechKey = action ? ('a' + action.key) : 'mood'
 
-        function togglePanel() { setPanel(!panel) }
+        // ---- 面板跟随鲸鱼：按鲸鱼中心 x 定位，左右边界夹紧 ----
+        function panelVisibleWidth() {
+          return Math.min(330, window.innerWidth - 28)
+        }
+        function clampPanelLeft(centerX) {
+          const pw = panelVisibleWidth()
+          const vw = window.innerWidth
+          let left = Math.round(centerX - pw / 2)
+          left = Math.min(vw - pw - 10, Math.max(10, left))
+          return left
+        }
+        function whaleCenterX() {
+          const whale = whaleElRef.current
+          if (whale) return swimRef.current.pos + whale.offsetWidth / 2
+          return swimRef.current.pos + (216 * settings.scale) / 2
+        }
+        function openPanel() {
+          setPanel(true)
+          setShowSettings(false)
+          setPanelLeft(clampPanelLeft(whaleCenterX()))
+        }
+        React.useEffect(() => {
+          if (!panel) return
+          const onResize = () => setPanelLeft(clampPanelLeft(whaleCenterX()))
+          window.addEventListener('resize', onResize)
+          return () => window.removeEventListener('resize', onResize)
+        }, [panel, settings.scale, isFrozen])
+
+        function togglePanel() {
+          if (panel) setPanel(false)
+          else { requestNotifyPermission(); openPanel() }
+        }
         function toggleSettings() { setShowSettings(!showSettings) }
         function doUpgrade() {
           if (data.upgrade && data.upgrade.running) return
@@ -493,6 +677,8 @@ window.__ModuleLoader__.load({
           ? { text: '已是最新', cls: 'ok', title: '' }
           : { text: '检查中…', cls: 'run', title: '' }
 
+        const panelCls = 'dsw-panel' + (settings.theme === 'light' ? ' dsw-theme-light' : '')
+
         return React.createElement('div', { className: 'dsw-root' + actClass },
           React.createElement('div', { className: 'dsw-tank' },
             React.createElement('div', { className: 'dsw-wave dsw-wave-1', dangerouslySetInnerHTML: { __html: WAVE_SVG(0.5) } }),
@@ -502,6 +688,7 @@ window.__ModuleLoader__.load({
             ),
             React.createElement('div', { className: 'dsw-whale', ref: whaleElRef, style: { left: '8px', bottom: (22 - settings.sink) + 'px' } },
               data.approvalCount > 0 ? React.createElement('div', { className: 'dsw-badge' }, String(data.approvalCount)) : null,
+              data.questionCount > 0 ? React.createElement('div', { className: 'dsw-badge dsw-badge-question' }, String(data.questionCount)) : null,
               React.createElement('div', { className: 'dsw-whale-bounce' },
                 React.createElement('div', { className: 'dsw-whale-inner' },
                   speechText ? React.createElement('div', { key: speechKey, className: 'dsw-speech', style: { bottom: settings.bubble + 'px' } }, speechText) : null,
@@ -521,11 +708,14 @@ window.__ModuleLoader__.load({
               )
             )
           ),
-          panel ? React.createElement('div', { className: 'dsw-panel' },
+          panel ? React.createElement('div', { className: panelCls, style: { left: panelLeft == null ? 14 : panelLeft } },
             React.createElement('div', { className: 'dsw-panel-head' },
               React.createElement('span', null,
+                React.createElement('span', { className: 'dsw-logo' },
+                  React.createElement('img', { src: WHALE_LOGO, alt: 'DSWhale', draggable: false })
+                ),
                 React.createElement('span', { className: 'dsw-online' + (data.connected ? '' : ' dsw-offline') }),
-                '🐳 DSWhale · 会话状态'
+                'DSWhale · 会话状态'
               ),
               React.createElement('div', { className: 'dsw-panel-actions' },
                 React.createElement('button', { className: 'dsw-panel-gear' + (showSettings ? ' dsw-gear-on' : ''), onClick: toggleSettings, title: '鲸鱼设置' }, '⚙'),
@@ -539,6 +729,13 @@ window.__ModuleLoader__.load({
                   React.createElement('span', { className: 'dsw-settings-val' }, 'v' + (data.version || '…')),
                   React.createElement('span', { className: 'dsw-up dsw-up-' + upInfo.cls, title: upInfo.title || '' }, upInfo.text),
                   upInfo.action ? React.createElement('button', { className: 'dsw-settings-upgrade', onClick: doUpgrade, disabled: !!(up && up.running) }, '立即升级') : null
+                ),
+                React.createElement('div', { className: 'dsw-settings-row' },
+                  React.createElement('span', { className: 'dsw-settings-label' }, '主题'),
+                  React.createElement('div', { className: 'dsw-theme-toggle' },
+                    React.createElement('button', { className: 'dsw-theme-btn' + (settings.theme === 'dark' ? ' dsw-theme-on' : ''), onClick: () => setSettings(Object.assign({}, settings, { theme: 'dark' })) }, '深色'),
+                    React.createElement('button', { className: 'dsw-theme-btn' + (settings.theme === 'light' ? ' dsw-theme-on' : ''), onClick: () => setSettings(Object.assign({}, settings, { theme: 'light' })) }, '浅色')
+                  )
                 ),
                 React.createElement('div', { className: 'dsw-settings-row' },
                   React.createElement('span', { className: 'dsw-settings-label' }, '大小'),
@@ -560,6 +757,21 @@ window.__ModuleLoader__.load({
                   React.createElement('input', { type: 'range', min: '0', max: '1', step: '0.05', value: String(settings.opacity), onChange: (e) => setSettings(Object.assign({}, settings, { opacity: Number(e.target.value) })) }),
                   React.createElement('span', { className: 'dsw-settings-val' }, Math.round(settings.opacity * 100) + '%')
                 ),
+                React.createElement('div', { className: 'dsw-settings-row' },
+                  React.createElement('span', { className: 'dsw-settings-label' }, '提醒'),
+                  React.createElement('label', { className: 'dsw-check', title: '页面边缘闪屏 + 顶部提示（无需权限）' },
+                    React.createElement('input', { type: 'checkbox', checked: settings.alertFlash, onChange: (e) => setSettings(Object.assign({}, settings, { alertFlash: e.target.checked })) }),
+                    '闪屏'
+                  ),
+                  React.createElement('label', { className: 'dsw-check', title: '系统级原生通知（需授权，首次需点击鲸鱼）' },
+                    React.createElement('input', { type: 'checkbox', checked: settings.alertNotify, onChange: (e) => setSettings(Object.assign({}, settings, { alertNotify: e.target.checked })) }),
+                    '系统通知'
+                  ),
+                  React.createElement('label', { className: 'dsw-check', title: '浏览器标签栏闪烁（临时改文档标题）' },
+                    React.createElement('input', { type: 'checkbox', checked: settings.alertTitle, onChange: (e) => setSettings(Object.assign({}, settings, { alertTitle: e.target.checked })) }),
+                    '标签闪烁'
+                  )
+                ),
                 React.createElement('button', { className: 'dsw-settings-reset', onClick: () => setSettings(defaultSettings()) }, '恢复默认')
               ) : null,
               data.sessions.length === 0
@@ -569,6 +781,12 @@ window.__ModuleLoader__.load({
                 React.createElement('div', { className: 'dsw-feed-title' }, '最近动态'),
                 feedRows
               )
+            )
+          ) : null,
+          alert ? React.createElement('div', { key: 'alert' + alert.key, className: 'dsw-alert dsw-alert-' + alert.kind },
+            React.createElement('div', { className: 'dsw-alert-toast' },
+              React.createElement('span', null, (ALERT_META[alert.kind] || ALERT_META.question).heading),
+              React.createElement('span', { className: 'dsw-alert-sub' }, alert.text)
             )
           ) : null
         )
