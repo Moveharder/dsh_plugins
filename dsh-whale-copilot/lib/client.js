@@ -856,6 +856,9 @@ window.__ModuleLoader__.load({
                   flashSpeech(j.updateAvailable
                     ? ('发现新版本 v' + j.latest + '！可在设置里升级')
                     : ('已是最新 v' + (j.version || '') + '～'))
+                } else if (j && !j.ok && typeof j.error === 'string') {
+                  // 404/405 JSON（{error:'not found'}）：运行中的 Host 半区仍是旧版本、没有该路由
+                  flashSpeech('Host 半区还是旧版本，升级后重启 dsh web 就能用啦', 3400)
                 } else {
                   flashSpeech('更新检查失败了…稍后再试试', 2600)
                 }
