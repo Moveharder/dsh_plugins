@@ -124,7 +124,15 @@ function apply(ctx) {
     return new Promise((resolve, reject) => {
       let child
       try {
-        child = execFile(bin, args, Object.assign({ timeout: timeoutMs || 240000, maxBuffer: 8 * 1024 * 1024 }, opts || {}))
+        // Windows 上需要 shell: true 才能正确解析 .cmd 文件和 PATH 中的可执行文件
+        const isWin = process.platform === 'win32'
+        const options = Object.assign({
+          timeout: timeoutMs || 240000,
+          maxBuffer: 8 * 1024 * 1024,
+          shell: isWin,
+          windowsHide: isWin
+        }, opts || {})
+        child = execFile(bin, args, options)
       } catch (err) { reject(err); return }
       let out = ''
       if (child.stdout) child.stdout.on('data', (d) => { out += d })
