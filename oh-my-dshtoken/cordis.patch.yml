@@ -1,0 +1,4 @@
+# 插入一行：id 唯一；name 用包名（Node 解析找到安装后的代码，不能用相对路径）
+- insert:
+    - id: dshtoken
+      name: 'oh-my-dshtoken'
