@@ -116,13 +116,13 @@ window.__ModuleLoader__.load({
     const CSS = `
 .dtk-root{position:fixed;top:0;right:0;z-index:1200;font-family:'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',system-ui,sans-serif;pointer-events:none;}
 .dtk-root .dtk-entry,.dtk-root .dtk-panel{pointer-events:auto;}
-.dtk-entry{position:fixed;top:12px;right:14px;width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;border:none;background:rgba(79,142,247,.16);color:#4f8ef7;box-shadow:inset 0 0 0 1px rgba(79,142,247,.35);transition:background .15s,transform .15s;padding:0;}
-.dtk-entry:hover{background:rgba(79,142,247,.28);transform:translateY(-1px);}
-.dtk-entry svg{width:19px;height:19px;display:block;}
-.dtk-entry-dot{position:absolute;top:-4px;right:-4px;min-width:15px;height:15px;border-radius:8px;background:linear-gradient(135deg,#f43f5e,#e11d48);color:#fff;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px;box-shadow:0 2px 6px rgba(225,29,72,.5);}
+.dtk-entry{position:fixed;bottom:14px;right:14px;width:20px;height:20px;border-radius:6px;display:flex;align-items:center;justify-content:center;cursor:pointer;pointer-events:auto;border:none;background:rgba(79,142,247,.16);color:#4f8ef7;box-shadow:inset 0 0 0 1px rgba(79,142,247,.35);transition:background .15s,transform .15s;padding:0;}
+.dtk-entry:hover{background:rgba(79,142,247,.28);transform:translateY(1px);}
+.dtk-entry svg{width:11px;height:11px;display:block;}
+.dtk-entry-dot{position:absolute;top:-4px;right:-4px;min-width:10px;height:10px;border-radius:5px;background:linear-gradient(135deg,#f43f5e,#e11d48);color:#fff;font-size:7px;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 2px;box-shadow:0 1px 4px rgba(225,29,72,.5);}
 body[data-ds-dark-theme] .dtk-entry{background:rgba(96,165,250,.14);color:#93c5fd;box-shadow:inset 0 0 0 1px rgba(96,165,250,.4);}
 
-.dtk-panel{position:fixed;top:54px;right:14px;width:min(780px,calc(100vw - 28px));height:min(640px,calc(100vh - 76px));display:flex;flex-direction:column;pointer-events:auto;border-radius:16px;color:#0f172a;background:rgba(255,255,255,.97);border:1px solid rgba(15,23,42,.16);box-shadow:0 18px 50px rgba(2,6,23,.30);backdrop-filter:blur(10px);animation:dtk-pop .18s ease-out;overflow:hidden;
+.dtk-panel{position:fixed;bottom:42px;right:14px;width:min(780px,calc(100vw - 28px));height:min(640px,calc(100vh - 76px));display:flex;flex-direction:column;pointer-events:auto;border-radius:16px;color:#0f172a;background:rgba(255,255,255,.97);border:1px solid rgba(15,23,42,.16);box-shadow:0 18px 50px rgba(2,6,23,.30);backdrop-filter:blur(10px);animation:dtk-pop .18s ease-out;overflow:hidden;
   --dtk-tx:#0f172a; --dtk-fg:#334155; --dtk-mut:#64748b; --dtk-faint:#94a3b8;
   --dtk-sep:rgba(15,23,42,.10); --dtk-soft:rgba(15,23,42,.05); --dtk-hover:rgba(15,23,42,.07);
   --dtk-card:#f8fafc; --dtk-bar1:#4f8ef7; --dtk-bar2:#34d399;
@@ -135,7 +135,7 @@ body[data-ds-dark-theme] .dtk-panel{color:#e2e8f0;background:rgba(10,16,32,.95);
   --dtk-card:rgba(148,163,184,.08); --dtk-bar1:#60a5fa; --dtk-bar2:#34d399;
   --dtk-btn-bg:rgba(96,165,250,.18); --dtk-btn-tx:#bfdbfe; --dtk-btn-bd:rgba(96,165,250,.4);
   --dtk-inp-bg:rgba(15,23,42,.5); --dtk-inp-bd:rgba(148,163,184,.3);}
-@keyframes dtk-pop{from{transform:translateY(-8px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes dtk-pop{from{transform:translateY(8px);opacity:0}to{transform:translateY(0);opacity:1}}
 
 .dtk-head{display:flex;align-items:center;gap:9px;padding:11px 14px;border-bottom:1px solid var(--dtk-sep);flex:none;}
 .dtk-logo{width:26px;height:26px;border-radius:8px;background:linear-gradient(135deg,#4f8ef7,#34d399);display:flex;align-items:center;justify-content:center;flex:none;box-shadow:0 2px 8px rgba(79,142,247,.4);}
@@ -156,7 +156,7 @@ body[data-ds-dark-theme] .dtk-panel{color:#e2e8f0;background:rgba(10,16,32,.95);
 .dtk-body::-webkit-scrollbar-thumb{background:var(--dtk-sep);border-radius:5px;}
 
 /* ---- 汇总卡 ---- */
-.dtk-cards{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-bottom:10px;}
+.dtk-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px;}
 @media (max-width:720px){.dtk-cards{grid-template-columns:repeat(3,1fr)}}
 .dtk-card{background:var(--dtk-card);border-radius:12px;padding:9px 11px;min-width:0;}
 .dtk-card .dtk-k{font-size:10.5px;color:var(--dtk-mut);white-space:nowrap;display:flex;align-items:center;gap:5px;}
@@ -169,6 +169,10 @@ body[data-ds-dark-theme] .dtk-panel{color:#e2e8f0;background:rgba(10,16,32,.95);
 .dtk-tab{border:none;background:transparent;color:var(--dtk-mut);font-size:12.5px;font-weight:600;padding:5px 14px;border-radius:8px;cursor:pointer;transition:all .15s;white-space:nowrap;}
 .dtk-tab.on{background:var(--dtk-inp-bg);color:var(--dtk-tx);box-shadow:0 1px 4px rgba(2,6,23,.14);}
 body[data-ds-dark-theme] .dtk-tab.on{background:rgba(148,163,184,.18);}
+.dtk-seg{display:inline-flex;background:var(--dtk-soft);border-radius:8px;padding:2px;margin-left:auto;}
+.dtk-seg button{border:none;background:transparent;color:var(--dtk-mut);font-size:10.5px;font-weight:600;padding:2.5px 10px;border-radius:6px;cursor:pointer;white-space:nowrap;}
+.dtk-seg button.on{background:var(--dtk-inp-bg);color:var(--dtk-tx);box-shadow:0 1px 3px rgba(2,6,23,.14);}
+body[data-ds-dark-theme] .dtk-seg button.on{background:rgba(148,163,184,.18);}
 
 /* ---- 趋势图 ---- */
 .dtk-section-title{font-size:12px;font-weight:700;color:var(--dtk-mut);margin:2px 0 6px;display:flex;align-items:center;gap:8px;}
@@ -303,11 +307,13 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
           })));
     }
 
-    /** 模型占比环形图 */
-    function DonutChart({ models }) {
+    /** 模型占比环形图：metric = 'total'（总消耗）| 'cacheRead'（缓存读取） */
+    function DonutChart({ models, metric }) {
+      const field = metric === 'cacheRead' ? 'cacheReadTokens' : 'grandTotal';
+      const centerLabel = metric === 'cacheRead' ? '缓存读取 Token' : '总 Token';
       const top = models.slice(0, 10);
-      const total = models.reduce((s, m) => s + m.grandTotal, 0);
-      if (!total) return React.createElement('div', { className: 'dtk-empty' }, '暂无模型数据');
+      const total = models.reduce((s, m) => s + (m[field] || 0), 0);
+      if (!total) return React.createElement('div', { className: 'dtk-empty' }, metric === 'cacheRead' ? '暂无缓存读取数据' : '暂无模型数据');
       const R = 52, CIRC = 2 * Math.PI * R;
       let acc = 0;
       return React.createElement('div', { className: 'dtk-donut-wrap' },
@@ -315,7 +321,7 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
           React.createElement('svg', { width: 136, height: 136, viewBox: '0 0 136 136' },
             React.createElement('circle', { cx: 68, cy: 68, r: R, fill: 'none', stroke: 'var(--dtk-soft)', strokeWidth: 16 }),
             top.map((m, i) => {
-              const frac = m.grandTotal / total;
+              const frac = (m[field] || 0) / total;
               const dash = frac * CIRC;
               const off = -acc * CIRC;
               acc += frac;
@@ -328,13 +334,13 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
             })),
           React.createElement('div', { className: 'dtk-donut-center' },
             React.createElement('b', null, fmtTok(total)),
-            React.createElement('span', null, '总 Token'))),
+            React.createElement('span', null, centerLabel))),
         React.createElement('div', { className: 'dtk-donut-legend' },
           top.map((m, i) => React.createElement('div', { key: m.key, className: 'dtk-lg-row' },
             React.createElement('i', { style: { background: PALETTE[i % PALETTE.length] } }),
             React.createElement('span', { className: 'dtk-lg-name', title: m.key }, m.key),
-            React.createElement('span', { className: 'dtk-lg-val', title: fmtFull(m.grandTotal) }, fmtTok(m.grandTotal)),
-            React.createElement('span', { className: 'dtk-lg-pct' }, pct(m.grandTotal, total))))));
+            React.createElement('span', { className: 'dtk-lg-val', title: fmtFull(m[field] || 0) }, fmtTok(m[field] || 0)),
+            React.createElement('span', { className: 'dtk-lg-pct' }, pct(m[field] || 0, total))))));
     }
 
     // ==================== 主面板 ====================
@@ -349,11 +355,15 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
       if (!data) return null;
       const t = data.totals || {};
       const c = data.counts || {};
+      // 缓存命中率 = 缓存读取 ÷ (缓存读取 + 未命中输入)
+      const hitDenom = (t.cacheReadTokens || 0) + (t.inputTokens || 0);
+      const hitRate = hitDenom ? ((t.cacheReadTokens / hitDenom) * 100).toFixed(1) + '%' : '—';
       const cards = [
         { k: '总消耗', v: fmtTok(t.grandTotal), sub: '输入+输出', full: t.grandTotal, swatch: null },
         { k: '输入', v: fmtTok(t.inputTokens), sub: '未含缓存', full: t.inputTokens, swatch: 'var(--dtk-bar1)' },
         { k: '输出', v: fmtTok(t.outputTokens), sub: '', full: t.outputTokens, swatch: 'var(--dtk-bar2)' },
         { k: '缓存读取', v: fmtTok(t.cacheReadTokens), sub: '命中提示词', full: t.cacheReadTokens, swatch: '#a78bfa' },
+        { k: '缓存命中率', v: hitRate, sub: '缓存÷(缓存+输入)', title: '命中率 = 缓存读取 ' + fmtFull(t.cacheReadTokens || 0) + ' ÷ (缓存读取 ' + fmtFull(t.cacheReadTokens || 0) + ' + 输入 ' + fmtFull(t.inputTokens || 0) + ')', swatch: '#22d3ee' },
         { k: '会话', v: String(c.sessions || 0), sub: c.files ? ('日志文件 ' + c.files) : '', full: null, swatch: null },
         { k: '项目', v: String(c.projects || 0), sub: '模型 ' + (c.models || 0) + ' 个', full: null, swatch: null },
       ];
@@ -361,7 +371,7 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
         cards.map((cd) => React.createElement('div', { className: 'dtk-card', key: cd.k },
           React.createElement('div', { className: 'dtk-k' },
             cd.swatch ? React.createElement('i', { className: 'dtk-swatch', style: { background: cd.swatch } }) : null, cd.k),
-          React.createElement('div', { className: 'dtk-v', title: cd.full != null ? fmtFull(cd.full) : undefined }, cd.v),
+          React.createElement('div', { className: 'dtk-v', title: cd.title ? cd.title : (cd.full != null ? fmtFull(cd.full) : undefined) }, cd.v),
           cd.sub ? React.createElement('div', { className: 'dtk-sub' }, cd.sub) : null)));
     }
 
@@ -448,9 +458,22 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
 
     function ModelsTab({ data }) {
       const models = (data && data.models) || [];
+      // 环形图口径切换：总消耗 / 缓存读取
+      const [metric, setMetric] = React.useState('total');
       if (!models.length) return React.createElement('div', { className: 'dtk-empty' }, '暂无模型数据');
       return React.createElement('div', null,
-        React.createElement(DonutChart, { models }),
+        React.createElement('div', { className: 'dtk-section-title' }, '环形图分布',
+          React.createElement('span', { className: 'dtk-seg' },
+            React.createElement('button', {
+              className: metric !== 'cacheRead' ? 'on' : '',
+              onClick: () => setMetric('total'),
+            }, '总消耗'),
+            React.createElement('button', {
+              className: metric === 'cacheRead' ? 'on' : '',
+              onClick: () => setMetric('cacheRead'),
+              title: '各模型的缓存读取 token 占比',
+            }, '缓存读取'))),
+        React.createElement(DonutChart, { models, metric }),
         React.createElement('table', { className: 'dtk-table' },
           React.createElement('thead', null, React.createElement('tr', null,
             React.createElement('th', { className: 'l' }, '模型'),
@@ -542,24 +565,26 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
       React.useEffect(() => () => stopTicker(), []);
       ensureTicker();
 
-      // 入口防遮挡：右上角落点被其他元素占据时自动下移找空位（一次性，挂载时执行）
+      // 入口防遮挡：右下角落点被其他元素占据时自动上移找空位（一次性，挂载时执行）
       const rootRef = React.useRef(null);
       const entryRef = React.useRef(null);
       React.useEffect(() => {
         const btn = entryRef.current;
         if (!btn) return;
-        let y = 12;
-        btn.style.top = y + 'px';
+        const GAP = 14, STEP = 30;
+        let bottom = GAP;
+        btn.style.bottom = bottom + 'px';
         try {
           for (let i = 0; i < 16; i++) {
             const r = btn.getBoundingClientRect();
             if (r.height <= 0) break;
-            const cx = window.innerWidth - 14 - r.width / 2;
-            const el = document.elementFromPoint(cx, y + r.height / 2);
+            const cx = window.innerWidth - GAP - r.width / 2;
+            const cy = window.innerHeight - bottom - r.height / 2;
+            const el = document.elementFromPoint(cx, cy);
             if (!el || el === btn || (rootRef.current && rootRef.current.contains(el))) break;
-            y += 46;
-            if (y + r.height > window.innerHeight - 8) break;
-            btn.style.top = y + 'px';
+            bottom += STEP;
+            if (bottom + r.height > window.innerHeight * 0.6) break;
+            btn.style.bottom = bottom + 'px';
           }
         } catch (e) { /* 探测失败保持默认位置 */ }
       }, []);
@@ -582,7 +607,7 @@ body[data-ds-dark-theme] .dtk-table th{background:rgba(15,23,42,.85);}
       const scanning = !!(meta && meta.scanning);
 
       return React.createElement('div', { className: 'dtk-root', ref: rootRef },
-        // 右上角入口
+        // 右下角入口
         React.createElement('button', {
           ref: entryRef,
           className: 'dtk-entry', title: 'AI Token 消耗统计 (oh-my-dshtoken)',
