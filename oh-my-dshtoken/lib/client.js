@@ -7,7 +7,9 @@ window.__ModuleLoader__.load({
     const React = require("react");
 
     const name = "oh-my-dshtoken";
-    const inject = [];
+    // 依赖必须显式声明：当前运行时在启动时并发激活各插件，inject: [] 的插件
+    // 可能在 slots 服务就绪前 apply，导致 ctx.get("slots") 为空而静默退出。
+    const inject = ["slots"];
 
     // ==================== 工具函数 ====================
 
