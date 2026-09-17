@@ -1,5 +1,7 @@
 # 📅 全年活跃记录 — dsh-annual-activity
 
+[![npm version](https://img.shields.io/npm/v/dsh-annual-activity?color=blue)](https://www.npmjs.com/package/dsh-annual-activity) [![GitHub](https://img.shields.io/badge/source-GitHub-181717?logo=github)](https://github.com/Moveharder/dsh_plugins)
+
 > 一个**纯本地**的 DSH 活跃度统计面板：把你在 DSH 里每一天的「干活量」画成一张年度热力图
 > （GitHub 贡献图风格），统计口径是**本机真实会话日志**——不联网、不上报、不估算。
 
