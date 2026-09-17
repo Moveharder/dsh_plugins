@@ -334,7 +334,26 @@ const entryBtn = byClass(tree, 'daa-hbtn')[0]
 assert(!!entryBtn, '渲染出会话头部入口按钮')
 assert(String(entryBtn.props.className).includes('daa-hbtn'), '入口按钮挂 in-header class（28×28，对齐「打开右侧边栏」）')
 assert(!String(entryBtn.props.className).includes('daa-entry'), '旧的右下角浮动入口已移除')
+// 入口要足够显眼：常驻底色 + 一层细边（而不是纯透明按钮）
+const btnRule = /\.daa-hbtn\{([^}]*)\}/.exec(head.children[0].textContent)
+assert(!!btnRule, '样式里有 .daa-hbtn 规则')
+assert(/background:var\(--dsw-alias-interactive-bg-hover/.test(btnRule[1]), '按钮有常驻底色（比悬停态更浅的官方 token）')
+assert(/box-shadow:inset 0 0 0 1px var\(--dsw-alias-border-l2/.test(btnRule[1]), '按钮有 1px 细边（inset ring，随深浅主题）')
+assert(/width:28px;height:28px/.test(btnRule[1]), '按钮尺寸 28×28，与「打开右侧边栏」一致')
+assert(/\.daa-hbtn:hover\{[^}]*interactive-bg-active/.test(head.children[0].textContent), '悬停态底色更深一档')
 eq(byClass(tree, 'daa-glyph-cell').length, 14, '入口字形 = 最近 14 天（7 列 × 2 行）')
+
+// ---- 悬浮说明应出现在按钮【下方】，避免遮挡按钮与标题行 ----
+const entryRect = entryBtn.getBoundingClientRect()
+await act(() => byClass(tree, 'daa-hbtn')[0].props.onMouseEnter())
+const entryTip = byClass(tree, 'daa-tip-below')[0]
+assert(!!entryTip, '悬浮入口出现说明浮层（使用下方定位类）')
+assert(!String(entryTip.props.className).includes('daa-tip-above'), '不再使用上方定位')
+const tipTop = Number(String(entryTip.props.style.top).replace('px', ''))
+assert(tipTop >= entryRect.bottom, '说明浮层的 top ≥ 按钮底边（' + tipTop + ' ≥ ' + entryRect.bottom + '）')
+assert(textOf(entryTip).includes('今日') && textOf(entryTip).includes('今年'), '说明含今日/今年摘要')
+await act(() => byClass(tree, 'daa-hbtn')[0].props.onMouseLeave())
+assert(!byClass(tree, 'daa-tip-below')[0], '移开后说明浮层消失')
 
 // ---- 点击入口 → 打开面板 ----
 await act(() => byClass(tree, 'daa-hbtn')[0].props.onClick())
