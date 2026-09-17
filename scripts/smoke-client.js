@@ -312,6 +312,11 @@ assert(head.children[0].textContent.includes('.daa-l4'), '样式里包含 5 级�
 eq(slotReg && slotReg.options.name, 'conversation.session.header.utilities', '注册到会话头部 utilities 槽（DOM 中先于右上角 corner → 落在「打开右侧边栏」左边）')
 eq(slotReg && slotReg.options.id, 'annual-activity', '槽条目 id')
 assert(typeof slotReg.options.order === 'number', '槽条目带 order')
+// 顺序语义：renderer 按 order 升序渲染（sort((a,b)=>a.order-b.order)），条目都挂在
+// [data-slot="conversation.session.header.utilities"]（display:contents）下、成为 flex
+// 容器的直接子元素。官方「选择打开方式」(.CAgGvG_split) 用 -10、官方会话日志导出用
+// 默认 0，所以必须 < -10 才能成为该容器的第一个子元素。
+assert(slotReg.options.order < -10, `order < -10（实测 ${slotReg.options.order}）→ 排在「选择打开方式」之前`)
 
 // ======================= 渲染循环 =======================
 
@@ -371,13 +376,47 @@ const entryBtn = byClass(tree, 'daa-hbtn')[0]
 assert(!!entryBtn, '渲染出会话头部入口按钮')
 assert(String(entryBtn.props.className).includes('daa-hbtn'), '入口按钮挂 in-header class（28×28，对齐「打开右侧边栏」）')
 assert(!String(entryBtn.props.className).includes('daa-entry'), '旧的右下角浮动入口已移除')
-// 入口要足够显眼：常驻底色 + 一层细边（而不是纯透明按钮）
-const btnRule = /\.daa-hbtn\{([^}]*)\}/.exec(head.children[0].textContent)
+
+// ---- 数据未到时的骨架：不能是个「空按钮」 ----
+// 这一段的 await 全是微任务，store 里 setTimeout(0) 的首次拉取还没轮到定时器阶段，
+// 所以此刻正是「页面刚打开、还没点开过面板」的状态。
+eq(byClass(tree, 'daa-glyph-cell').length, 14, '数据未到时也渲染 14 格骨架（不是空按钮）')
+const glyphEl = byClass(tree, 'daa-glyph')[0]
+assert(String(glyphEl.props.className).includes('daa-glyph-loading'), '骨架带 daa-glyph-loading（呼吸动画）')
+eq(entryBtn.props['aria-busy'], 'true', '加载中标记 aria-busy')
+assert(entryBtn.props['aria-label'].includes('加载中'), 'aria-label 说明正在加载')
+assert(
+  byClass(tree, 'daa-glyph-cell').every((c) => !/daa-l\d/.test(String(c.props.className))),
+  '骨架格子不套用活跃等级色（避免看起来像「全未活跃」）',
+)
+const glyphCss = head.children[0].textContent
+const loadingRule = /\.daa-glyph-loading\{([^}]*)\}/.exec(glyphCss)
+assert(!!loadingRule && /animation:daa-glyph-pulse/.test(loadingRule[1]), '样式里有骨架呼吸动画')
+assert(/\.daa-glyph-loading \.daa-glyph-cell\{[^}]*background:/.test(glyphCss), '骨架格子有可见底色')
+
+// ---- 首次订阅必须立刻拉取（不能等面板打开 / 等 8s）----
+const pullsBeforeTick = pulls.length
+await new Promise((r) => setTimeout(r, 10)) // 放行一次真实的定时器阶段
+assert(pulls.length > pullsBeforeTick, '挂载后立即拉取 /activity/pull（不必先打开面板）')
+assert(pulls[0].startsWith('/activity/pull'), '首次拉取就是 /activity/pull')
+assert(!byClass(tree, 'daa-glyph-loading')[0], '数据到达后骨架消失')
+assert(byClass(tree, 'daa-hbtn')[0].props['aria-busy'] === undefined, '数据到达后去掉 aria-busy')
+
+// 入口要足够显眼：常驻底色（而不是纯透明按钮），但不使用 box-shadow
+const btnCss = head.children[0].textContent
+const btnRule = /\.daa-hbtn\{([^}]*)\}/.exec(btnCss)
 assert(!!btnRule, '样式里有 .daa-hbtn 规则')
 assert(/background:var\(--dsw-alias-interactive-bg-hover/.test(btnRule[1]), '按钮有常驻底色（比悬停态更浅的官方 token）')
-assert(/box-shadow:inset 0 0 0 1px var\(--dsw-alias-border-l2/.test(btnRule[1]), '按钮有 1px 细边（inset ring，随深浅主题）')
+assert(!/box-shadow/.test(btnRule[1]), '按钮基态没有 box-shadow')
 assert(/width:28px;height:28px/.test(btnRule[1]), '按钮尺寸 28×28，与「打开右侧边栏」一致')
-assert(/\.daa-hbtn:hover\{[^}]*interactive-bg-active/.test(head.children[0].textContent), '悬停态底色更深一档')
+assert(/\.daa-hbtn:hover\{[^}]*interactive-bg-active/.test(btnCss), '悬停态底色更深一档')
+// 按钮相关的每一条规则都不该再出现 box-shadow（含 hover / 选中态 / 更新圆点）
+for (const sel of ['.daa-hbtn:hover', '.daa-hbtn.on', '.daa-hbtn-dot']) {
+  const rule = new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\{([^}]*)\\}').exec(btnCss)
+  assert(!!rule, `样式里有 ${sel} 规则`)
+  assert(!/box-shadow/.test(rule[1]), `${sel} 没有 box-shadow`)
+}
+assert(!/\.daa-hbtn-dot\{[^}]*box-shadow/.test(btnCss), '深色兜底里也没有给圆点补 box-shadow')
 eq(byClass(tree, 'daa-glyph-cell').length, 14, '入口字形 = 最近 14 天（7 列 × 2 行）')
 
 // ---- 悬浮说明应出现在按钮【下方】，避免遮挡按钮与标题行 ----
@@ -417,13 +456,56 @@ assert(pulls.length >= 1 && pulls[0].startsWith('/activity/pull'), '打开面板
 
 const card = byClass(tree, 'daa-card')[0]
 assert(!!card, '面板卡片已渲染')
+// ---- 面板宽度 + 热力图必须放得下（否则 .daa-heat 出横向滚动条）----
+const cardRule = /\.daa-card\{([^}]*)\}/.exec(cssText)[1]
+assert(/width:min\(760px,calc\(100vw - 40px\)\)/.test(cardRule), '面板宽度 = min(760px, calc(100vw - 40px))')
+assert(/box-sizing:border-box/.test(cardRule), '卡片显式 border-box：760px 就是可见总宽（不依赖宿主 reset）')
+assert(/min-width:0/.test(cardRule), '卡片 min-width:0：否则 flex item 会被内容 min-content 顶宽')
+const cardW = Number(/width:min\((\d+)px/.exec(cardRule)[1])
+const padX = Number(/padding:\d+px (\d+)px/.exec(cardRule)[1])
+const gridRule = /\.daa-grid\{([^}]*)\}/.exec(cssText)[1]
+// 列宽必须是「自适应 + 有下限」：自适应才能铺满卡片内容宽（否则右侧留白），
+// 下限保证窄视口下不会把格子压成碎片（放不下时由 .daa-heat 横向滚动）。
+const colsDecl = /grid-template-columns:([^;]*)/.exec(gridRule)[1]
+const minPx = Number(/repeat\(var\(--daa-cols,\d+\),minmax\((\d+)px,1fr\)\)/.exec(colsDecl)[1])
+const gapPx = Number(/gap:(\d+)px/.exec(gridRule)[1])
+const colCount = 53 // 一年最多 53 列
+assert(!/min-width:max-content/.test(gridRule), '网格不再写 min-width:max-content（会阻止它铺满宽度）')
+assert(/1fr/.test(colsDecl), '网格列宽自适应（1fr）→ 最后一列右边缘 = 内容区右边界，右侧无留白')
+assert(minPx >= 6, `列宽下限 ${minPx}px 不会把格子压成碎片`)
+// 内容宽至少能容纳下限宽度（否则一打开就出现横向滚动条）
+const contentW = cardW - 2 * padX - 2
+assert(
+  colCount * minPx + (colCount - 1) * gapPx <= contentW,
+  `最窄布局 ${colCount}×${minPx}px + ${colCount - 1}×${gapPx}px = ${colCount * minPx + (colCount - 1) * gapPx}px ≤ 卡片内容宽 ${contentW}px`,
+)
+// 格子尺寸由 CSS 决定（正方形），不能再写死像素——否则网格与内容宽对不齐
+const cellRule = /\.daa-cell\{([^}]*)\}/.exec(cssText)[1]
+assert(/width:100%/.test(cellRule) && /aspect-ratio:1\/1/.test(cellRule), '.daa-cell 宽度跟随列宽且保持正方形')
+// 月份轴与网格必须用同一套列宽/间距，否则标签会和色块错位
+const monthsRule = /\.daa-months\{([^}]*)\}/.exec(cssText)[1]
+eq(
+  /grid-template-columns:[^;]*/.exec(monthsRule)[0],
+  /grid-template-columns:[^;]*/.exec(gridRule)[0],
+  '月份轴与热力图列定义一致（含 minmax 自适应，否则标签会与色块错位）',
+)
+eq(/gap:(\d+)px/.exec(monthsRule)[1], String(gapPx), '月份轴与热力图列间距一致')
+// 图例色块尺寸要和网格格子一致
+const legendCell = /\.daa-legend-cell\{([^}]*)\}/.exec(cssText)[1]
+const legendPx = Number(/width:(\d+)px/.exec(legendCell)[1])
+// 格子是流式的，按当前卡片宽度算出实际尺寸，再和图例色块比（两者应几乎一样大）
+const actualCellPx = (contentW - (colCount - 1) * gapPx) / colCount
+assert(
+  Math.abs(legendPx - actualCellPx) <= 2,
+  `图例色块 ${legendPx}px ≈ 实际格子 ${actualCellPx.toFixed(1)}px（差 ${Math.abs(legendPx - actualCellPx).toFixed(1)}px）`,
+)
 // 面板同样要 portal 到 body：否则会在滚动容器里被裁剪/被页面内容遮挡
 const cardPortal = portalCreations[portalCreations.length - 1]
 assert(!!cardPortal && cardPortal.container.className === 'daa-portal', '面板卡片通过 portal 渲染到 body 层')
 const backdropEl = byClass(tree, 'daa-backdrop')[0]
 assert(!!backdropEl, '遮罩层已渲染')
 assert(Number(backdropEl.props.style.zIndex) > 10000, '遮罩层自身层级足够高（' + backdropEl.props.style.zIndex + '）')
-eq(textOf(byClass(tree, 'daa-title')[0]), '全年活跃记录', '标题 = 全年活跃记录')
+eq(textOf(byClass(tree, 'daa-title')[0]), 'DSH-活跃记录', '标题 = DSH-活跃记录')
 const subText = textOf(byClass(tree, 'daa-sub')[0])
 assert(subText.includes('2 天活跃'), '副标题含「N 天活跃」')
 assert(subText.includes('活跃率'), '副标题含活跃率')
@@ -473,6 +555,7 @@ assert(!byClass(tree, 'daa-tip')[0], '移开后明细浮层消失')
 // ---- 年份切换 ----
 const yearCur = byClass(tree, 'daa-year-cur')[0]
 assert(textOf(yearCur).includes('2026'), '年份切换器默认显示 2026')
+eq(textOf(yearCur).replace(/\s+/g, ''), '2026▾', '年份只显示数字，不带「年」字（▾ 是下拉箭头）')
 const yearBtns = byClass(tree, 'daa-year-btn')
 eq(yearBtns.length, 2, '年份切换有前后两个按钮')
 const prevBtn = yearBtns.find((b) => textOf(b) === '‹')
@@ -481,6 +564,7 @@ const pullCountBefore = pulls.length
 await act(() => prevBtn.props.onClick())
 assert(pulls.length > pullCountBefore && pulls[pulls.length - 1].includes('year=2025'), '切到 2025 会按该年重新拉取')
 assert(textOf(byClass(tree, 'daa-year-cur')[0]).includes('2025'), '年份切换器显示 2025')
+assert(!textOf(byClass(tree, 'daa-year-cur')[0]).includes('年'), '切换后同样不带「年」字')
 eq(byClass(tree, 'daa-col').length, 53, '2025 年也是 53 列')
 cells = byClass(tree, 'daa-cell')
 eq(cells.filter((c) => /daa-l[1-4]/.test(String(c.props.className))).length, 3, '2025 年色块数量 = 该年活跃日数')
