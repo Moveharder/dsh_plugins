@@ -54,6 +54,11 @@ const documentStub = {
   addEventListener(type, fn) { (this._ls = this._ls || {})[type] = (this._ls[type] || []).concat(fn) },
   removeEventListener() {},
 }
+// portal 宿主会挂到 document.body：MockNode 已实现 appendChild/remove，
+// 再补一个 lastElementChild 便于断言「浮层确实挂在 body 直下」。
+Object.defineProperty(documentStub.body, 'lastElementChild', {
+  get() { return this.children[this.children.length - 1] || null },
+})
 
 // ======================= 最小 React（按组件实例隔离 hooks）=======================
 
@@ -80,7 +85,7 @@ const React = {
     for (const c of children) {
       if (Array.isArray(c)) { for (const x of c) flat.push(x) } else flat.push(c)
     }
-    return { $$el: true, type, props: props || {}, children: flat }
+    return { $$el: true, type, props: props || {}, style: {}, children: flat }
   },
   useState(init) {
     const { rec, i } = nextHook(init)
@@ -224,6 +229,21 @@ globalThis.fetch = async (url, opts) => {
   return { ok: true, status: 200, json: async () => payloadFor(y, days) }
 }
 
+// ======================= 最小 ReactDOM（createPortal 打桩）=======================
+// 与真实 react-dom 一样：把内容「挂到」传入的容器（这里在 document.body 造一个
+// 宿主节点），同时把元素树原样返回，便于测试继续按 class 定位与触发交互。
+const portalCreations = []
+const ReactDOM = {
+  createPortal(node, container) {
+    if (!container) throw new Error('createPortal: container is required')
+    const holder = new MockNode('div')
+    holder.className = container.className
+    container.appendChild(holder)
+    portalCreations.push({ container, holder, node })
+    return node
+  },
+}
+
 // ======================= 装载 bundle =======================
 
 let bundle = null
@@ -251,6 +271,7 @@ eq(bundle.id, 'dsh-annual-activity', 'bundle id = 包名')
 
 const mod = bundle.factory((id) => {
   if (id === 'react') return React
+  if (id === 'react-dom') return ReactDOM
   throw new Error('unexpected require: ' + id)
 })
 eq(mod.name, 'dsh-annual-activity', 'exports.name')
@@ -320,6 +341,8 @@ function findAll(node, pred, acc = []) {
   return acc
 }
 const byClass = (t, cls) => findAll(t, (n) => String(n.props.className || '').split(/\s+/).includes(cls))
+/** portal 宿主是否已从 body 移除（MockNode.remove 只打标记，与真实 DOM 语义一致）。 */
+const portalHostRemoved = () => portalCreations.length > 0 && portalCreations.every((p) => p.container.removed === true)
 const textOf = (node) => {
   if (node == null || node === false || node === true) return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -352,6 +375,21 @@ assert(!String(entryTip.props.className).includes('daa-tip-above'), '不再使�
 const tipTop = Number(String(entryTip.props.style.top).replace('px', ''))
 assert(tipTop >= entryRect.bottom, '说明浮层的 top ≥ 按钮底边（' + tipTop + ' ≥ ' + entryRect.bottom + '）')
 assert(textOf(entryTip).includes('今日') && textOf(entryTip).includes('今年'), '说明含今日/今年摘要')
+
+// ---- 关键修复：入口不能有原生 title（浏览器自带提示框会浮在按钮上方遮挡按钮）----
+assert(entryBtn.props.title === undefined, '入口按钮不设原生 title（避免顶部遮挡）')
+assert(typeof entryBtn.props['aria-label'] === 'string' && entryBtn.props['aria-label'].length > 0, '改用 aria-label 保留可访问性')
+
+// ---- 关键修复：浮层必须 portal 到 body，否则被会话头部所在滚动容器裁剪/困住 ----
+assert(portalCreations.length >= 1, '悬浮说明通过 createPortal 渲染')
+const host = portalCreations[portalCreations.length - 1].container
+eq(host.className, 'daa-portal', 'portal 宿主使用 daa-portal 类')
+eq(documentStub.body.children.indexOf(host) >= 0, true, 'portal 宿主挂在 document.body 直下')
+eq(String(host.style.position), 'fixed', 'portal 宿主 position:fixed（跳出头部的层叠上下文）')
+eq([host.style.top, host.style.right, host.style.bottom, host.style.left].join(','), '0,0,0,0', 'portal 宿主铺满视口（fixed 的包含块是视口而非头部）')
+assert(Number(host.style.zIndex) > 10000, 'portal 宿主层级足够高（' + host.style.zIndex + '）')
+assert(Number(entryTip.props.style.zIndex) > 10, '悬浮说明自身层级高于按钮（' + entryTip.props.style.zIndex + '）')
+
 await act(() => byClass(tree, 'daa-hbtn')[0].props.onMouseLeave())
 assert(!byClass(tree, 'daa-tip-below')[0], '移开后说明浮层消失')
 
@@ -361,6 +399,12 @@ assert(pulls.length >= 1 && pulls[0].startsWith('/activity/pull'), '打开面板
 
 const card = byClass(tree, 'daa-card')[0]
 assert(!!card, '面板卡片已渲染')
+// 面板同样要 portal 到 body：否则会在滚动容器里被裁剪/被页面内容遮挡
+const cardPortal = portalCreations[portalCreations.length - 1]
+assert(!!cardPortal && cardPortal.container.className === 'daa-portal', '面板卡片通过 portal 渲染到 body 层')
+const backdropEl = byClass(tree, 'daa-backdrop')[0]
+assert(!!backdropEl, '遮罩层已渲染')
+assert(Number(backdropEl.props.style.zIndex) > 10000, '遮罩层自身层级足够高（' + backdropEl.props.style.zIndex + '）')
 eq(textOf(byClass(tree, 'daa-title')[0]), '全年活跃记录', '标题 = 全年活跃记录')
 const subText = textOf(byClass(tree, 'daa-sub')[0])
 assert(subText.includes('2 天活跃'), '副标题含「N 天活跃」')
@@ -463,6 +507,7 @@ assert(!byClass(tree, 'daa-card')[0], '点击遮罩空白处关闭面板')
 // ---- 卸载清理 ----
 disposers.forEach((d) => { if (typeof d === 'function') d() })
 assert(head.children[0].removed === true, '卸载时移除 style 元素')
+assert(portalHostRemoved(), '卸载时回收 portal 宿主（不留下空壳 div）')
 
 // ======================= 内部几何 / 格式化 =======================
 
