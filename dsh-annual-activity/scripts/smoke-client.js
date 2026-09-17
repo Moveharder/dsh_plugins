@@ -54,6 +54,11 @@ const documentStub = {
   addEventListener(type, fn) { (this._ls = this._ls || {})[type] = (this._ls[type] || []).concat(fn) },
   removeEventListener() {},
 }
+// portal 宿主会挂到 document.body：MockNode 已实现 appendChild/remove，
+// 再补一个 lastElementChild 便于断言「浮层确实挂在 body 直下」。
+Object.defineProperty(documentStub.body, 'lastElementChild', {
+  get() { return this.children[this.children.length - 1] || null },
+})
 
 // ======================= 最小 React（按组件实例隔离 hooks）=======================
 
@@ -80,7 +85,7 @@ const React = {
     for (const c of children) {
       if (Array.isArray(c)) { for (const x of c) flat.push(x) } else flat.push(c)
     }
-    return { $$el: true, type, props: props || {}, children: flat }
+    return { $$el: true, type, props: props || {}, style: {}, children: flat }
   },
   useState(init) {
     const { rec, i } = nextHook(init)
@@ -100,6 +105,12 @@ const React = {
     return rec.hooks[i].value
   },
   useMemo(fn) { return fn() },
+  // layout effect 在真实 React 里每次提交都会跑（不做 deps 比较），这里保持一致：
+  // 依赖它「挂载后按实测尺寸修正位置」的逻辑必须每次渲染后都能执行。
+  useLayoutEffect(fn) {
+    nextHook(null)
+    fn()
+  },
   useEffect(fn, deps) {
     const { rec, i } = nextHook(null)
     const prev = rec.hooks[i]
@@ -137,11 +148,19 @@ function renderNode(node) {
 
 function makeHostNode(el) {
   el.style = el.style || {}
-  el.getBoundingClientRect = () => ({ left: 1200, top: 800, width: 96, height: 30, right: 1296, bottom: 830 })
+  el.getBoundingClientRect = () => {
+    // 悬浮说明的尺寸可调：用于验证「下方空间不足时自动上移」的自适应逻辑
+    if (String(el.className || '').split(/\s+/).includes('daa-tip')) {
+      return { left: 0, top: 0, width: tipBox.width, height: tipBox.height, right: tipBox.width, bottom: tipBox.height }
+    }
+    return { left: 1200, top: 800, width: 96, height: 30, right: 1296, bottom: 830 }
+  }
   el.contains = (other) => other === el || el.children.includes(other)
   el.remove = () => { el.removed = true }
   return el
 }
+/** 悬浮说明的模拟尺寸（测试中途可改，触发自适应分支）。 */
+const tipBox = { width: 184, height: 60 }
 
 function collectPending(node, acc = []) {
   if (node == null || typeof node !== 'object') return acc
@@ -224,6 +243,21 @@ globalThis.fetch = async (url, opts) => {
   return { ok: true, status: 200, json: async () => payloadFor(y, days) }
 }
 
+// ======================= 最小 ReactDOM（createPortal 打桩）=======================
+// 与真实 react-dom 一样：把内容「挂到」传入的容器（这里在 document.body 造一个
+// 宿主节点），同时把元素树原样返回，便于测试继续按 class 定位与触发交互。
+const portalCreations = []
+const ReactDOM = {
+  createPortal(node, container) {
+    if (!container) throw new Error('createPortal: container is required')
+    const holder = new MockNode('div')
+    holder.className = container.className
+    container.appendChild(holder)
+    portalCreations.push({ container, holder, node })
+    return node
+  },
+}
+
 // ======================= 装载 bundle =======================
 
 let bundle = null
@@ -251,6 +285,7 @@ eq(bundle.id, 'dsh-annual-activity', 'bundle id = 包名')
 
 const mod = bundle.factory((id) => {
   if (id === 'react') return React
+  if (id === 'react-dom') return ReactDOM
   throw new Error('unexpected require: ' + id)
 })
 eq(mod.name, 'dsh-annual-activity', 'exports.name')
@@ -320,6 +355,8 @@ function findAll(node, pred, acc = []) {
   return acc
 }
 const byClass = (t, cls) => findAll(t, (n) => String(n.props.className || '').split(/\s+/).includes(cls))
+/** portal 宿主是否已从 body 移除（MockNode.remove 只打标记，与真实 DOM 语义一致）。 */
+const portalHostRemoved = () => portalCreations.length > 0 && portalCreations.every((p) => p.container.removed === true)
 const textOf = (node) => {
   if (node == null || node === false || node === true) return ''
   if (typeof node === 'string' || typeof node === 'number') return String(node)
@@ -352,6 +389,25 @@ assert(!String(entryTip.props.className).includes('daa-tip-above'), '不再使�
 const tipTop = Number(String(entryTip.props.style.top).replace('px', ''))
 assert(tipTop >= entryRect.bottom, '说明浮层的 top ≥ 按钮底边（' + tipTop + ' ≥ ' + entryRect.bottom + '）')
 assert(textOf(entryTip).includes('今日') && textOf(entryTip).includes('今年'), '说明含今日/今年摘要')
+
+// ---- 关键修复：入口不能有原生 title（浏览器自带提示框会浮在按钮上方遮挡按钮）----
+assert(entryBtn.props.title === undefined, '入口按钮不设原生 title（避免顶部遮挡）')
+assert(typeof entryBtn.props['aria-label'] === 'string' && entryBtn.props['aria-label'].length > 0, '改用 aria-label 保留可访问性')
+
+// ---- 关键修复：CSS 级联顺序 —— 修饰类必须排在基础类之后 ----
+// 同优先级下后出现的规则生效：.daa-tip-below 若写在 .daa-tip 之前，
+// 基础类的 translate(-50%,-100%) 会赢，浮层被上移自身高度（"上半部分看不到"）。
+const cssText = head.children[0].textContent
+const atBase = cssText.indexOf('.daa-tip{')
+const atBelow = cssText.indexOf('.daa-tip-below{')
+assert(atBase >= 0 && atBelow >= 0, '样式里同时存在 .daa-tip 与 .daa-tip-below')
+assert(atBelow > atBase, '.daa-tip-below 排在 .daa-tip 之后（级联顺序正确，base 的 -100% 不会覆盖它）')
+assert(/\.daa-tip-below\{transform:translate\(-50%,0\)/.test(cssText), '.daa-tip-below 使用 translate(-50%,0)（不向上偏移）')
+assert(!/\.daa-tip-above/.test(cssText), '不存在残留的上方定位规则')
+// 间距：浮层要明显离开按钮与标题行，不能贴着
+const tipGap = tipTop - entryRect.bottom
+assert(tipGap >= 12, '浮层与按钮底边留有间距（' + tipGap + 'px ≥ 12px）')
+
 await act(() => byClass(tree, 'daa-hbtn')[0].props.onMouseLeave())
 assert(!byClass(tree, 'daa-tip-below')[0], '移开后说明浮层消失')
 
@@ -361,6 +417,12 @@ assert(pulls.length >= 1 && pulls[0].startsWith('/activity/pull'), '打开面板
 
 const card = byClass(tree, 'daa-card')[0]
 assert(!!card, '面板卡片已渲染')
+// 面板同样要 portal 到 body：否则会在滚动容器里被裁剪/被页面内容遮挡
+const cardPortal = portalCreations[portalCreations.length - 1]
+assert(!!cardPortal && cardPortal.container.className === 'daa-portal', '面板卡片通过 portal 渲染到 body 层')
+const backdropEl = byClass(tree, 'daa-backdrop')[0]
+assert(!!backdropEl, '遮罩层已渲染')
+assert(Number(backdropEl.props.style.zIndex) > 10000, '遮罩层自身层级足够高（' + backdropEl.props.style.zIndex + '）')
 eq(textOf(byClass(tree, 'daa-title')[0]), '全年活跃记录', '标题 = 全年活跃记录')
 const subText = textOf(byClass(tree, 'daa-sub')[0])
 assert(subText.includes('2 天活跃'), '副标题含「N 天活跃」')
@@ -463,6 +525,7 @@ assert(!byClass(tree, 'daa-card')[0], '点击遮罩空白处关闭面板')
 // ---- 卸载清理 ----
 disposers.forEach((d) => { if (typeof d === 'function') d() })
 assert(head.children[0].removed === true, '卸载时移除 style 元素')
+assert(portalHostRemoved(), '卸载时回收 portal 宿主（不留下空壳 div）')
 
 // ======================= 内部几何 / 格式化 =======================
 
@@ -482,6 +545,28 @@ eq(inner.fmtPercent(0.105), '11%', '活跃率 >=1% 时取整')
 eq(inner.fmtCompact(32534755), '32.53M', 'Token 紧凑格式')
 eq(inner.levelOfDay({ level: 4 }), 4, 'levelOfDay 透传数据里的等级')
 eq(inner.levelOfDay(null), 0, 'levelOfDay 无记录 → 0')
+
+// ---- 自适应：直接用纯函数验证（DOM 尺寸测量由真实浏览器负责）----
+const fit = inner.fitTipPosition
+assert(typeof fit === 'function', '导出 fitTipPosition 供测试')
+eq(fit({ left: 800, top: 400 }, { width: 184, height: 60 }, { width: 1440, height: 900 }), { left: 800, top: 400 }, '下方空间充足时位置不变')
+eq(fit({ left: 800, top: 848 }, { width: 184, height: 60 }, { width: 1440, height: 900 }), { left: 800, top: 832 }, '轻微越界时上移到贴边（900-8-60=832）')
+eq(fit({ left: 800, top: 848 }, { width: 184, height: 400 }, { width: 1440, height: 900 }), { left: 800, top: 492 }, '下方空间不足时上移到刚好放得下（900-8-400=492）')
+eq(fit({ left: 1400, top: 100 }, { width: 184, height: 60 }, { width: 1440, height: 900 }), { left: 1340, top: 100 }, '右侧越界时向左收（1440-8-184/2=1340）')
+eq(fit({ left: 20, top: 100 }, { width: 184, height: 60 }, { width: 1440, height: 900 }), { left: 100, top: 100 }, '左侧越界时向右推（8+184/2=100）')
+eq(fit({ left: 800, top: 848 }, { width: 0, height: 0 }, { width: 1440, height: 900 }), { left: 800, top: 848 }, '尺寸未知时不乱动（首帧兜底）')
+eq(fit({ left: 800, top: 848 }, { width: 184, height: 60 }, null), { left: 800, top: 848 }, '拿不到视口尺寸时退回原值')
+
+// ---- 关键修复：浮层必须 portal 到 body，否则被会话头部所在滚动容器裁剪/困住 ----
+assert(portalCreations.length >= 1, '悬浮说明通过 createPortal 渲染')
+const host = portalCreations[portalCreations.length - 1].container
+eq(host.className, 'daa-portal', 'portal 宿主使用 daa-portal 类')
+eq(documentStub.body.children.indexOf(host) >= 0, true, 'portal 宿主挂在 document.body 直下')
+eq(String(host.style.position), 'fixed', 'portal 宿主 position:fixed（跳出头部的层叠上下文）')
+eq([host.style.top, host.style.right, host.style.bottom, host.style.left].join(','), '0,0,0,0', 'portal 宿主铺满视口（fixed 的包含块是视口而非头部）')
+assert(Number(host.style.zIndex) > 10000, 'portal 宿主层级足够高（' + host.style.zIndex + '）')
+assert(Number(entryTip.props.style.zIndex) > 10, '悬浮说明自身层级高于按钮（' + entryTip.props.style.zIndex + '）')
+
 
 if (failures === 0) {
   console.log('\n✓ client smoke 全部通过')

@@ -5,6 +5,12 @@ window.__ModuleLoader__.load({
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
     const React = require("react");
+    // 必须走 portal：入口挂在会话头部的 utilities 槽里，而那个头部位于
+    // `.wSkVaW_scrollBody{overflow-y:auto}` 这个滚动容器内——position:fixed 的
+    // 后代会被祖先滚动容器裁剪（同时被其层叠上下文困住），表现为面板被页面内容
+    // 遮挡、悬浮说明顶部被切掉。portal 到 document.body 才能彻底跳出来。
+    let ReactDOM = null;
+    try { ReactDOM = require("react-dom"); } catch (err) { /* 旧运行时没有 react-dom：退化为内联渲染 */ }
 
     const name = "dsh-annual-activity";
     // 依赖必须显式声明：boot 阶段各插件并发激活，inject: [] 的插件可能在 slots
@@ -26,6 +32,11 @@ window.__ModuleLoader__.load({
     const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     const LS_YEAR = 'dsh-annual-activity:year';
     const LS_GEAR = 'dsh-annual-activity:setup-open';
+    // portal 浮层的层级：必须压过页面上的内容与其它插件浮层（鲸鱼 999 / token 面板
+    // 1000 / 市场 toast 等），同时留出余量避免将来更高层的组件把它盖住。
+    const Z_PORTAL = 2147483000;
+    // 入口浮层与按钮底边的间距：太小会贴着标题行显得"被压住"
+    const TIP_GAP = 18;
 
     const pad2 = (n) => (n < 10 ? '0' + n : '' + n);
     const dayKeyOf = (y, m, d) => y + '-' + pad2(m + 1) + '-' + pad2(d);
@@ -138,6 +149,33 @@ window.__ModuleLoader__.load({
       if (data.byDay) for (const day of Object.keys(data.byDay)) map[day] = data.byDay[day];
       for (const rec of data.days || []) map[rec.day] = rec;
       return map;
+    }
+
+    // ==================== portal 宿主 ====================
+    // 面板与悬浮说明都渲染到 document.body 下的一个固定层里，避开会话头部所在
+    // 滚动容器的裁剪与层叠上下文。
+    const PORTAL_CLASS = 'daa-portal';
+    let portalHost = null;
+    function ensurePortalHost() {
+      if (portalHost && portalHost.isConnected !== false) return portalHost;
+      portalHost = document.createElement('div');
+      portalHost.className = PORTAL_CLASS;
+      portalHost.setAttribute('data-plugin', 'dsh-annual-activity');
+      // 内联层级 + 视口铺满：position:fixed 需要「视口大小的包含块」，
+      // 否则父级（头部槽位）的尺寸会成为浮层的包含块，panel 会被挤在头部区域里。
+      portalHost.style.position = 'fixed';
+      portalHost.style.top = '0';
+      portalHost.style.right = '0';
+      portalHost.style.bottom = '0';
+      portalHost.style.left = '0';
+      portalHost.style.pointerEvents = 'none';
+      portalHost.style.zIndex = String(Z_PORTAL);      document.body.appendChild(portalHost);
+      return portalHost;
+    }
+    /** 把浮层内容 portal 到 body；运行时没有 react-dom 时退化为内联渲染。 */
+    function portalToBody(node) {
+      if (!ReactDOM || typeof ReactDOM.createPortal !== 'function') return node;
+      try { return ReactDOM.createPortal(node, ensurePortalHost()); } catch (err) { return node; }
     }
 
     // ==================== 迷你 store：轮询 host 的只读接口 ====================
@@ -350,7 +388,7 @@ window.__ModuleLoader__.load({
       // 贴近单元格上方，但不越出视口
       const top = Math.max(8, Math.round(y) - 8);
       const left = Math.min(Math.max(Math.round(x), 110), Math.max(110, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 110));
-      const style = { left: left + 'px', top: top + 'px' };
+      const style = { left: left + 'px', top: top + 'px', zIndex: 20 };
       return React.createElement('div', { className: 'daa-tip', style },
         React.createElement('div', { className: 'daa-tip-head' }, head),
         rows.map(([k, v]) => React.createElement('div', { className: 'daa-tip-row', key: k },
@@ -412,7 +450,7 @@ window.__ModuleLoader__.load({
     // ==================== 面板 ====================
 
     function ActivityPanel(props) {
-      const { onClose } = props;
+      const { onClose, summary } = props;
       const state = useStore();
       const data = state.data;
       const today = (data && data.today) || todayKey();
@@ -474,9 +512,11 @@ window.__ModuleLoader__.load({
 
       return React.createElement('div', {
         className: 'daa-backdrop',
+        // 内联层级：这一层是 portal 宿主里唯一的直接子元素，层级写死避免被宿主样式覆盖
+        style: { zIndex: Z_PORTAL },
         onMouseDown: (e) => { if (e.target === e.currentTarget) onClose(); },
       },
-        React.createElement('div', { className: 'daa-card', role: 'dialog', 'aria-label': '全年活跃记录' },
+        React.createElement('div', { className: 'daa-card', role: 'dialog', 'aria-label': summary || '全年活跃记录' },
           // ---- 头部 ----
           React.createElement('div', { className: 'daa-head' },
             React.createElement('div', { className: 'daa-head-l' },
@@ -627,7 +667,8 @@ window.__ModuleLoader__.load({
           type: 'button',
           className: 'daa-hbtn' + (open ? ' on' : ''),
           'aria-label': '全年活跃记录',
-          title,
+          // 刻意不设原生 title：浏览器自带的提示框会浮在按钮上方并遮挡按钮，
+          // 提示改由下方自绘浮层承担（EntryTip）。
           onClick: () => setOpen(!open),
           onMouseEnter: onEnter,
           onMouseLeave: () => setTip(null),
@@ -636,21 +677,63 @@ window.__ModuleLoader__.load({
             glyphCells(byDay).map((c, i) => React.createElement('span', {
               key: i, className: 'daa-glyph-cell' + (c.level < 0 ? ' daa-glyph-void' : ' daa-l' + c.level),
             }))),
-          updateAvailable ? React.createElement('span', { className: 'daa-hbtn-dot', title: '有新版本 v' + (meta && meta.latest) }) : null),
-        tip ? React.createElement(EntryTip, { tip }) : null,
-        open ? React.createElement(ActivityPanel, { onClose: () => setOpen(false) }) : null);
+          updateAvailable ? React.createElement('span', { className: 'daa-hbtn-dot', 'aria-label': '有新版本' }) : null),
+        tip ? portalToBody(React.createElement(EntryTip, { tip })) : null,
+        open ? portalToBody(React.createElement(ActivityPanel, { onClose: () => setOpen(false), summary: title })) : null);
     }
 
-    /** 入口悬浮说明：固定定位在按钮**下方**（放在上方会遮住按钮与标题行）。 */
+    /**
+     * 浮层位置自适应（纯函数，便于直接测试）：
+     *  - 下方空间不足时整体上移到「刚好放得下」，保证整块浮层可见；
+     *  - 右侧越界时向左收，避免贴边被截断；
+     *  - 视口信息缺失时退回原值。
+     */
+    function fitTipPosition(base, size, viewport, margin) {
+      const m = typeof margin === 'number' ? margin : 8;
+      let { left, top } = base;
+      const vw = viewport && viewport.width;
+      const vh = viewport && viewport.height;
+      const w = size && size.width;
+      const h = size && size.height;
+      if (vh && h && top + h > vh - m) top = Math.max(m, vh - m - h);
+      if (vw && w && left + w / 2 > vw - m) left = vw - m - w / 2;
+      if (left - w / 2 < m) left = m + w / 2;
+      return { left: Math.round(left), top: Math.round(top) };
+    }
+
+    /** 入口悬浮说明：渲染在按钮**下方**（放到上方会盖住按钮与标题行）。
+     *  位置不是死偏移：挂载后按实测高度微调，保证顶部不会被头部/视口切掉。 */
     function EntryTip({ tip }) {
       const { today: rec, stats, x, y } = tip;
+      const tipRef = React.useRef(null);
       const rows = [
         ['今日', rec ? fmtInt(rec.turns) + ' 轮' : '未活跃'],
         ['今年', (stats ? fmtInt(stats.activeDays) : '0') + ' 天活跃 · ' + fmtPercent(stats ? stats.rate : 0)],
         ['连登', fmtInt(stats ? stats.weekStreak : 0) + ' 周'],
       ];
-      const left = Math.min(Math.max(Math.round(x), 110), Math.max(110, window.innerWidth - 130));
-      return React.createElement('div', { className: 'daa-tip daa-tip-below', style: { left: left + 'px', top: Math.round(y) + 8 + 'px' } },
+      const baseLeft = Math.min(Math.max(Math.round(x), 110), Math.max(110, window.innerWidth - 130));
+      const baseTop = Math.round(y) + TIP_GAP;
+
+      React.useLayoutEffect(() => {
+        const el = tipRef.current;
+        if (!el || typeof el.getBoundingClientRect !== 'function') return;
+        const rect = el.getBoundingClientRect();
+        const fitted = fitTipPosition(
+          { left: baseLeft, top: baseTop },
+          { width: rect.width, height: rect.height },
+          { width: window.innerWidth, height: window.innerHeight },
+          8
+        );
+        if (fitted.top !== baseTop) el.style.top = fitted.top + 'px';
+        if (fitted.left !== baseLeft) el.style.left = fitted.left + 'px';
+      });
+
+      return React.createElement('div', {
+        ref: tipRef,
+        className: 'daa-tip daa-tip-below',
+        // 初值：按钮下方 TIP_GAP 像素，随后由 layout effect 按实测尺寸修正
+        style: { left: baseLeft + 'px', top: baseTop + 'px', zIndex: 20 },
+      },
         rows.map(([k, v]) => React.createElement('div', { className: 'daa-tip-row', key: k },
           React.createElement('span', { className: 'daa-tip-k' }, k),
           React.createElement('span', { className: 'daa-tip-v' }, v))));
@@ -683,12 +766,6 @@ window.__ModuleLoader__.load({
 .daa-hbtn-dot{position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;
   background:var(--dsw-alias-state-business-primary,#f59e0b);
   box-shadow:0 0 0 1.5px var(--dsw-alias-bg-layer-1,#fff);}
-/* 入口悬浮说明：贴在按钮下方（放在上方会盖住按钮本身与会话标题） */
-.daa-tip-below{transform:translate(-50%,0);}
-.daa-tip-below::before{content:'';position:absolute;left:50%;top:-4px;width:8px;height:8px;
-  margin-left:-4px;transform:rotate(45deg);background:inherit;
-  border-left:1px solid var(--dsh-border,#e5e7eb);border-top:1px solid var(--dsh-border,#e5e7eb);
-  border-top-left-radius:2px;}
 /* ---------- 遮罩 + 卡片 ---------- */
 .daa-backdrop{position:fixed;inset:0;pointer-events:auto;background:rgba(15,23,42,.42);
   display:flex;align-items:center;justify-content:center;padding:24px;animation:daa-fade .14s ease-out;}
@@ -762,6 +839,14 @@ window.__ModuleLoader__.load({
 .daa-tip-row{display:flex;justify-content:space-between;gap:12px;font-size:11.5px;line-height:1.7;}
 .daa-tip-k{color:var(--dsh-text-3,#9aa1ab);}
 .daa-tip-v{color:var(--dsh-text-1,#111827);font-variant-numeric:tabular-nums;}
+/* 入口浮层修饰类：必须排在 .daa-tip 之后 —— 同优先级下后者会覆盖前者，
+   写成「先修饰后基础」会让 translate(-50%,-100%) 生效，把浮层整体上移自身
+   高度（正好是"上半部分看不到"的现象）。 */
+.daa-tip-below{transform:translate(-50%,0);}
+.daa-tip-below::before{content:'';position:absolute;left:50%;top:-4px;width:8px;height:8px;
+  margin-left:-4px;transform:rotate(45deg);background:inherit;
+  border-left:1px solid var(--dsh-border,#e5e7eb);border-top:1px solid var(--dsh-border,#e5e7eb);
+  border-top-left-radius:2px;}
 /* ---------- 底部 ---------- */
 .daa-foot{display:flex;align-items:center;gap:10px;margin-top:12px;padding-top:9px;
   border-top:1px solid var(--dsh-border,#f0f1f3);font-size:11.5px;color:var(--dsh-text-3,#9aa1ab);}
@@ -826,7 +911,17 @@ window.__ModuleLoader__.load({
       styleEl.setAttribute("data-plugin", "dsh-annual-activity");
       styleEl.textContent = CSS;
       document.head.appendChild(styleEl);
-      ctx.effect(() => () => { try { styleEl.remove(); } catch (e) { /* ignore */ } });
+
+      // portal 宿主随插件卸载一并移除（portal 出去的内容不在 React 树上，
+      // 卸载时槽位卸载会清掉内容，但宿主 div 会留下空壳，这里显式回收）。
+      const disposePortal = () => {
+        try { if (portalHost && portalHost.remove) portalHost.remove(); } catch (e) { /* ignore */ }
+        portalHost = null;
+      };
+      ctx.effect(() => () => {
+        try { styleEl.remove(); } catch (e) { /* ignore */ }
+        disposePortal();
+      });
 
       // 注册到会话头部右侧「utility」列表槽：该槽在 DOM 中先于右上角
       // corner 槽（「打开右侧边栏」按钮所在处）渲染，所以这个入口会落在
@@ -841,7 +936,7 @@ window.__ModuleLoader__.load({
     exports.name = name;
     exports.inject = inject;
     exports.apply = apply;
-    exports.__internal = { buildWeeks, monthLabels, fmtPercent, fmtCompact, levelOfDay, indexDays, glyphCells, FALLBACK_LEVELS, store, metaStore };
+    exports.__internal = { buildWeeks, monthLabels, fmtPercent, fmtCompact, levelOfDay, indexDays, glyphCells, fitTipPosition, FALLBACK_LEVELS, store, metaStore };
     return module.exports;
   }
 });
