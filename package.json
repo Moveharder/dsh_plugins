@@ -1,0 +1,60 @@
+{
+  "name": "dsh-pocket-ui",
+  "version": "0.1.0",
+  "description": "DSH Web UI 移动端适配（轻量核心版）：窄屏下侧栏变抽屉、对话框变底部 sheet、刘海安全区避让、输入区不重叠；鼠标操作的桌面端任何宽度都完全 no-op。",
+  "author": "spartaattack",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "assets",
+    "cordis.patch.yml",
+    "README.md",
+    "DESIGN.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "smoke": "node scripts/smoke-host.js && node scripts/smoke-client.js",
+    "smoke:host": "node scripts/smoke-host.js",
+    "smoke:client": "node scripts/smoke-client.js"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "dsh-plugin",
+    "mobile",
+    "responsive",
+    "pocket",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Moveharder/dsh_plugins.git"
+  },
+  "homepage": "https://github.com/Moveharder/dsh_plugins",
+  "bugs": {
+    "url": "https://github.com/Moveharder/dsh_plugins/issues"
+  }
+}

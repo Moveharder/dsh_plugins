@@ -1,0 +1,11 @@
+# dsh-pocket-ui bundle patch: one plugin row.
+#
+# The browser half is discovered through package.json's `dsh.client` declaration
+# (platform: web); this row only needs to exist in the host Loader so the plugin
+# owns a fiber. `id` is the handle users target when disabling:
+#
+#   - id: pocket-ui
+#     disabled: true
+- insert:
+    - id: pocket-ui
+      name: 'dsh-pocket-ui'
