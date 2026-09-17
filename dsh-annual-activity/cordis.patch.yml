@@ -1,0 +1,15 @@
+# dsh-annual-activity bundle patch — declared by `dsh.bundle.patch` in package.json
+# and applied automatically as a profile layer by
+# `dsh plugin --profile web add dsh-annual-activity` (no manual merge needed).
+#
+# One row mounts the host half from the package main; @deepseek-ai/dsh-client-modules
+# automatically serves the browser half because the package declares
+# dsh.client: { platform: 'web' }.
+#
+# To disable without uninstalling, disable the row in your profile's cordis.patch.yml
+# (it outranks this bundle layer):
+#   - id: activity
+#     disabled: true
+- insert:
+    - id: activity
+      name: 'dsh-annual-activity'
