@@ -34,9 +34,10 @@ import { execFile } from 'node:child_process'
 const name = 'dsh-pocket-ui'
 
 // webServer is a web-app layer service: it must be injected so routes are only
-// registered once webStartup is ready. timer provides plugin-scoped intervals
-// that are disposed automatically on unload.
-const inject = ['timer', 'webServer']
+// registered once webStartup is ready. The `timer` service is deliberately NOT
+// injected — the update re-check uses a raw interval owned by ctx.effect (see
+// the note at the bottom of apply).
+const inject = ['webServer']
 
 /** npm registry version-check period (also runs once at startup). */
 const UPDATE_CHECK_INTERVAL = 6 * 3600 * 1000
@@ -275,7 +276,13 @@ function apply(ctx) {
     } catch (err) { /* connection already closed */ }
   }
 
-  ctx.webServer.register({
+  // The route MUST go through ctx.effect. `webServer.register` is a *service*
+  // method, not a ctx method, so nothing tracks its disposer for us — calling it
+  // bare and discarding the return value leaves the route behind after unload,
+  // and the next hot-mount dies with:
+  //   webserver: duplicate prefix route "/pocket"
+  // (observed when toggling the plugin off/on from the market UI).
+  ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/pocket',
     handler: async (req, res) => {
@@ -315,12 +322,24 @@ function apply(ctx) {
         routes: ['/pocket/hello', '/pocket/meta', 'POST /pocket/check-update', 'POST /pocket/upgrade'],
       })
     },
-  })
+  }), name + ': routes')
 
   // Startup check + periodic re-check; fire-and-forget so a slow registry can
   // never delay plugin activation.
-  void checkUpdate()
-  ctx.setInterval(() => { void checkUpdate() }, UPDATE_CHECK_INTERVAL)
+  //
+  // A raw timer inside ctx.effect, matching the house style in the core packages
+  // (see @deepseek-ai/dsh-client-hmr). `ctx.setInterval` is mixed in from the
+  // timer service, and the mixin's proxy resolves `this.ctx` to the *service's*
+  // own context rather than the caller's, so the timer would outlive this
+  // plugin. unref() keeps a pending check from holding the process open.
+  ctx.effect(() => {
+    void checkUpdate()
+    const timer = setInterval(() => { void checkUpdate() }, UPDATE_CHECK_INTERVAL)
+    // Node timers expose unref(); not every host does, and a missing one must not
+    // take the plugin down.
+    if (typeof timer.unref === 'function') timer.unref()
+    return () => { clearInterval(timer) }
+  }, name + ': update-check')
 
   ctx.logger?.info?.(`[${name}] host ready · v${VERSION}`)
 }

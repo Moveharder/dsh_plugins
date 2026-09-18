@@ -391,6 +391,46 @@ async function runMobile(cdp, session) {
       expect(panel.top > panel.vh * 0.05, 'sheet is a sheet, not a full-screen page', JSON.stringify(panel))
       expectEqual(panel.hostAlign, 'flex-end', 'dialog wrapper aligns to the bottom')
 
+      // Correct geometry does not mean a usable sheet: the point of a bottom
+      // sheet is that its content scrolls. Measure a real scroll rather than
+      // just asserting an overflow rule exists.
+      const scroller = await evaluate(cdp, session, `(() => {
+        const dialog = document.querySelector('[role="presentation"] > [role="dialog"][aria-modal="true"]')
+        if (!dialog) return null
+        const overflowing = [...dialog.querySelectorAll('*')].filter((el) => {
+          const cs = getComputedStyle(el)
+          return /auto|scroll/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 4
+        })
+        const el = overflowing[overflowing.length - 1]
+        if (!el) {
+          let tallest = null
+          for (const node of dialog.querySelectorAll('*')) {
+            if (!tallest || node.scrollHeight > tallest.scrollHeight) tallest = node
+          }
+          return { found: false, tallest: tallest ? {
+            tag: tallest.tagName, cls: String(tallest.className).slice(0, 40),
+            scrollHeight: tallest.scrollHeight, clientHeight: tallest.clientHeight } : null }
+        }
+        const before = el.scrollTop
+        el.scrollTop = el.scrollHeight
+        return { found: true, before, after: el.scrollTop,
+                 scrollHeight: el.scrollHeight, clientHeight: el.clientHeight }
+      })()`)
+
+      if (!scroller || !scroller.found) {
+        record(false, 'settings content is scrollable',
+          'no scrollable descendant — content below the fold is unreachable: ' + JSON.stringify(scroller))
+      } else {
+        expect(scroller.after > scroller.before, 'settings content actually scrolls',
+          JSON.stringify(scroller))
+      }
+
+      const sheetHeight = await evaluate(cdp, session, `(() => {
+        const dialog = document.querySelector('[role="presentation"] > [role="dialog"][aria-modal="true"]')
+        return { h: Math.round(dialog.getBoundingClientRect().height), vh: window.innerHeight }
+      })()`)
+      expect(sheetHeight.h <= sheetHeight.vh * 0.9, 'sheet respects its height cap', JSON.stringify(sheetHeight))
+
       if (SCREENSHOT_DIR) {
         const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, session)
         await fs.writeFile(path.join(SCREENSHOT_DIR, 'pocket-mobile-sheet.png'), Buffer.from(shot.data, 'base64'))

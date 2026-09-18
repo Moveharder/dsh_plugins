@@ -309,7 +309,48 @@ html[data-pocket="on"] [role="dialog"][aria-modal="true"] > nav {
 
 ### 8.4 一个自己踩了两次的坑：CSS 注释里的反引号
 
-样式表是模板字符串。在注释里写 `` `left` `` 这样的反引号会**终止字符串**，整个 bundle 变成语法错误，表现为「页面完全没有 UI」而不是任何有用的报错。参考项目的 94KB 踩坑文档里明确警告过，我仍然踩了两次。已固化成冒烟断言。
+样式表是模板字符串。在注释里写 `` `left` `` 这样的反引号会**终止字符串**，整个 bundle 变成语法错误，表现为「页面完全没有 UI」而不是任何有用的报错。参考项目的 94KB 踩坑文档里明确警告过，我仍然踩了两次（累计三次）。已固化成冒烟断言。
+
+### 8.5 路由没有随插件卸载回收（v0.1.0 线上缺陷）
+
+**症状**：在插件市场里关掉再启用，报
+`failed to apply loader entry mkt-pocket-ui (dsh-pocket-ui): webserver: duplicate prefix route "/pocket"`。
+
+**根因**：`webServer.register()` 是**服务方法**，不是 `ctx` 方法。它返回 disposer，但**框架不会替你跟踪**——只有 `ctx.on` / `ctx.tools.register` / `ctx.effect` 这些 `ctx` 方法才进 fiber 的清理表。我直接调用并丢弃了返回值，于是：
+
+1. 首次挂载注册路由 ✓
+2. 停用 → fiber 销毁 → **路由仍在表里** ✗
+3. 重新启用 → `register` 撞上重复路径直接抛错 ✗
+
+**对策**：`ctx.effect(() => ctx.webServer.register({...}), label)`。参考项目正是这么写的。
+
+**顺带查出的同类问题**：`ctx.setInterval` 同样不该用。它由 timer 服务 `ctx.mixin` 混入，而 mixin 的 proxy 让 service 自身的属性优先——`this.ctx` 解析到的是**定时器服务自己的 context**，不是调用方的，所以定时器会活过插件卸载。核心包的房规是**裸 `setInterval` 包在 `ctx.effect` 里并返回 `clearInterval`**（见 `dsh-client-hmr`）。两处都已按此改，并从 `inject` 移除了不再需要的 `timer`。
+
+> 这两条对**任何** DSH 插件都成立，不只是本插件。
+
+### 8.6 底部 sheet 无法滚动（v0.1.0 线上缺陷）
+
+**症状**：设置弹框能打开、位置也对，但**内容滚不动**，下半截设置项永远看不到。
+
+**根因**：把面板从宿主的 `flex-direction: row` 改成 `column` 时，**自动最小尺寸的适用轴也跟着换了**。宿主的内容列带 `flex:1; min-width:0`——在 row 布局下这是对的；但变成 column 后起约束作用的是 `min-height`，而它的默认值 `auto` **拒绝收缩到内容高度以下**。于是内容列长到完整高度、撑破面板的 `max-height`，被面板的 `overflow:hidden` 裁掉，内层滚动容器永远拿不到受限高度，也就永远不滚动。
+
+A/B 实测（把修复退回 `min-height: auto`）的诊断输出直接指向根因：
+
+```
+VOzbGW_content  scrollHeight: 860, clientHeight: 860
+```
+
+两者相等 = 内容列没被约束。修复后 `scrollHeight > clientHeight` 且实际滚动生效。
+
+**对策**：给内容列（`nav + *`）及其子元素补 `min-height: 0`。同时把 `max-height: 88vh` 升级为 `88vh` + `88dvh` 双写——`vh` 按最大视口计算，移动端地址栏出现时 sheet 会伸到可视区之外。
+
+**教训（通用）**：**翻转 flex 方向时，`min-width` 与 `min-height` 必须成对考虑**。宿主的样式只保证了原方向那一半。
+
+### 8.7 一条"永远不会触发"的守卫
+
+`smoke-client.js` 里那条"CSS 注释禁止反引号"的断言，最初排在 `new Function(source)` **之后**。而反引号导致的正是语法错误——`new Function` 先抛，断言永远没机会跑。它看起来像防护，实际是死代码。
+
+已移到文件最前面（`0. source-level guards`），并写明理由。**守卫必须放在它要保护的操作之前，否则等于没有。**
 
 ---
 
@@ -317,9 +358,14 @@ html[data-pocket="on"] [role="dialog"][aria-modal="true"] > nav {
 
 | 层 | 工具 | 结果 |
 | --- | --- | --- |
-| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **16/16** |
-| Host 路由 + 在线升级全链路（离线） | `scripts/smoke-host.js` | **13/13** |
-| 真实 DOM / 几何 / 层叠 / 命中测试 | `scripts/verify-cdp.mjs` | **41/41** |
+| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **18/18** |
+| Host 路由 + 在线升级全链路（离线） | `scripts/smoke-host.js` | **14/14** |
+| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 | `scripts/verify-cdp.mjs` | **43/43** |
+
+§8.5 与 §8.6 两个线上缺陷都补了**能失败的**回归断言，不是事后描述：
+
+- `unload releases the route so a hot remount works` —— 让 fake `webServer` 像真的一样在重复注册时抛错，然后模拟卸载再挂载。修复前必红。
+- `settings content is scrollable` —— 在真实浏览器里**执行一次滚动**并断言 `scrollTop` 变化；找不到可滚动后代时打印最高后代的 `scrollHeight/clientHeight` 供定位。已用 A/B 确认退回修复必红（见 §8.6）。
 
 CDP 探针覆盖三种视口：移动端 390×844（触摸模拟）、窄桌面 900×800、桌面 1280×800。桌面两种宽度都断言了零地标残留、零注入控件、宿主网格未被改动。
 

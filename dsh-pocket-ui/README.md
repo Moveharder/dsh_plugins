@@ -133,19 +133,32 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-node scripts/smoke-client.js     # 16 项：bundle 契约 + 样式表不变量
-node scripts/smoke-host.js       # 13 项：路由 + 在线升级全链路（离线可跑）
+node scripts/smoke-client.js     # 18 项：bundle 契约 + 样式表不变量
+node scripts/smoke-host.js       # 14 项：路由 + 在线升级全链路（离线可跑）
 node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screenshot ./shots
 ```
 
-CDP 探针（41 项断言）是唯一能验证真实 DOM、计算后几何与层叠的方式：
+CDP 探针（43 项断言）是唯一能验证真实 DOM、计算后几何与层叠的方式：
 
-- **移动端**（390×844 + 触摸模拟）：门控开启、样式注入、地标打标、viewport meta、网格塌缩、抽屉开合、遮罩可点、sheet 贴底全宽且**不被困在抽屉里**、无幽灵滚动、状态行渲染
+- **移动端**（390×844 + 触摸模拟）：门控开启、样式注入、地标打标、viewport meta、网格塌缩、抽屉开合、遮罩可点、sheet 贴底全宽且**不被困在抽屉里**、**内容真的能滚动**、无幽灵滚动、状态行渲染
 - **窄桌面**（900×800，鼠标）+ **桌面**（1280×800）：门控关闭、零地标残留、零注入控件、宿主网格未被改动、侧栏未被改成抽屉
 
 > headless Chrome **没有任何指针设备**，三个 `(pointer: …)` 查询全为 false。必须用
 > `Emulation.setTouchEmulationEnabled` 才能让 `(pointer: coarse)` 命中——
 > `Emulation.setEmulatedMedia` 对指针特征**静默无效**。
+
+## 更新记录
+
+### v0.1.1
+
+修复两个线上缺陷：
+
+- **插件关掉再启用会报 `webserver: duplicate prefix route "/pocket"`**。`webServer.register()` 是服务方法，返回的 disposer 框架不会自动跟踪，之前被丢弃了，路由因此活过卸载。已改为 `ctx.effect(() => …)` 包裹。同批把更新检查的定时器也从 `ctx.setInterval` 换成 `ctx.effect` 里的裸 `setInterval`（前者绑定在定时器服务的 fiber 上，会活过插件卸载）。
+- **设置弹框无法上下滚动**，下半截设置项看不到。把面板从 `row` 翻成 `column` 后，内容列缺了 `min-height: 0`，无法收缩、撑破面板被裁掉，内层滚动容器拿不到受限高度。同时把 `max-height` 升级为 `88vh` + `88dvh` 双写。
+
+### v0.1.0
+
+首个版本。
 
 ## 已知边界（轻量核心版刻意不做）
 
