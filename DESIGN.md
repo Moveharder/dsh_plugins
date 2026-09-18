@@ -352,20 +352,45 @@ VOzbGW_content  scrollHeight: 860, clientHeight: 860
 
 已移到文件最前面（`0. source-level guards`），并写明理由。**守卫必须放在它要保护的操作之前，否则等于没有。**
 
+### 8.8 作用域规则一刀切，把设置行变成了裸 HTML（v0.1.1 线上缺陷）
+
+**症状**：设置页里本插件的状态行**移动端很好看，桌面端很丑**——标题、说明、按钮各占一行，没有内边距、没有分隔线，说明文字 14px 而邻行 12px。
+
+**根因**：我在"加固"阶段把**所有**规则都锁进了 `html[data-pocket="on"]`，包括 `.pocket-row*`。这对"改写宿主"的规则是对的，但 `settings.general.item` 是**宿主在任何宽度都会渲染**的槽位——门控关掉后，我的行就退化成无样式的裸 HTML。桌面端不是"没有副作用"，而是"该有的样式也没了"。
+
+CDP 实测对比：
+
+| | 官方行 | 我的行（未修复） |
+| --- | --- | --- |
+| `padding` | `16px 0` | `0px` |
+| `border-bottom` | `.5px solid var(--dsw-alias-border-l2)` | `0px none` |
+| 说明文字 | `12px / 18px` | `14px / normal` |
+
+**对策**：区分两类规则，并把这条区分写成不变量：
+
+> **改写宿主的规则要门控；渲染在两种模式下的自有组件不要门控。**
+
+`.pocket-fab` / `.pocket-backdrop` 只在移动模式渲染（组件本身 `return null`），门控是双保险；`.pocket-row*` 必须不门控。
+
+顺带把行的度量**照抄宿主**（`.5px solid var(--dsw-alias-border-l2)`、`16px 0`、文本列 `padding-right: 48px`、标题 14/22、说明 12/18），而不是沿用我原先自拟的 `10px 0` / `12px` gap。分隔线由宿主的 `GeneralSection` 统一处理（它用 `> :last-child { border-bottom: none }` 去掉最后一行），所以我的行不用自己加。
+
+**断言写法**：CDP 探针**不硬编码数值，而是拿我的行和邻行比**——`padding`、`gap`、说明字号、标题行高必须一致。这样断言的是"看起来属于这个列表"这个真实需求，宿主将来改自己的行距也不会误报。
+
 ---
 
 ## 9. 验证结果
 
 | 层 | 工具 | 结果 |
 | --- | --- | --- |
-| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **18/18** |
+| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **20/20** |
 | Host 路由 + 在线升级全链路（离线） | `scripts/smoke-host.js` | **14/14** |
-| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 | `scripts/verify-cdp.mjs` | **43/43** |
+| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 / 行度量 | `scripts/verify-cdp.mjs` | **53/53** |
 
 §8.5 与 §8.6 两个线上缺陷都补了**能失败的**回归断言，不是事后描述：
 
 - `unload releases the route so a hot remount works` —— 让 fake `webServer` 像真的一样在重复注册时抛错，然后模拟卸载再挂载。修复前必红。
 - `settings content is scrollable` —— 在真实浏览器里**执行一次滚动**并断言 `scrollTop` 变化；找不到可滚动后代时打印最高后代的 `scrollHeight/clientHeight` 供定位。已用 A/B 确认退回修复必红（见 §8.6）。
+- `settings row padding matches its neighbours`（桌面端）—— 与邻行比对而非硬编码，见 §8.8。
 
 CDP 探针覆盖三种视口：移动端 390×844（触摸模拟）、窄桌面 900×800、桌面 1280×800。桌面两种宽度都断言了零地标残留、零注入控件、宿主网格未被改动。
 

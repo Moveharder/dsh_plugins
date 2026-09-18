@@ -154,21 +154,54 @@ function selectorsOf(ruleHead) {
   return ruleHead.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-check('every rule is inert unless html[data-pocket="on"]', () => {
-  // The desktop no-op invariant, asserted structurally. No exceptions: even our
-  // own .pocket-* chrome is scoped, so an inactive plugin contributes exactly
-  // zero matching rules and there is nothing to undo on a wide screen.
+check('every rule either gates on the pocket attribute or styles our own chrome', () => {
+  // The desktop no-op invariant, asserted structurally. A rule may be:
+  //   (a) scoped under html[data-pocket="on"] — it rewrites the host, or renders
+  //       only in mobile mode; or
+  //   (b) a `.pocket-*` rule — it styles chrome that is ours.
+  // Nothing else is allowed, so an inactive plugin contributes zero host
+  // overrides and there is nothing to undo on a wide screen.
   const offenders = []
   for (const head of topLevelRules(css)) {
     for (const selector of selectorsOf(head)) {
-      if (!selector.startsWith('html[data-pocket="on"]')) offenders.push(selector)
+      const scoped = selector.startsWith('html[data-pocket="on"]')
+      const ownChrome = selector.startsWith('.pocket-')
+      if (!scoped && !ownChrome) offenders.push(selector)
     }
   }
   assert.deepEqual(offenders, [],
-    'unscoped rules would leak into desktop:\n    ' + offenders.join('\n    '))
+    'unscoped host selectors would leak into desktop:\n    ' + offenders.join('\n    '))
 })
 
-check('our own chrome is rendered only while active', () => {
+check('the settings row is styled at every width, not just on mobile', () => {
+  // Regression guard for a real bug: `settings.general.item` is rendered by the
+  // host at EVERY width, so scoping its rules under html[data-pocket="on"] left
+  // the row as bare unstyled HTML on desktop — no padding, no separator, and a
+  // 14px hint where the host uses 12px. Mobile looked right, desktop looked
+  // broken, which is exactly the confusing half-styled state this forbids.
+  const scoped = /html\[data-pocket="on"\]\s+\.pocket-row\b/
+  assert.ok(!scoped.test(css),
+    'the settings row must not be gated on the mobile attribute')
+  assert.ok(css.includes('.pocket-row {'), 'unscoped .pocket-row rule present')
+})
+
+check('the settings row matches the host row metrics', () => {
+  // Copied from the host's own general-settings rows so the plugin does not look
+  // like a foreign body in the list.
+  const row = css.match(/\.pocket-row \{[^}]*\}/)
+  assert.ok(row, '.pocket-row rule present')
+  assert.match(row[0], /padding:\s*16px 0/, 'host rows use 16px 0')
+  assert.match(row[0], /border-bottom:\s*\.5px solid var\(--dsw-alias-border-l2/,
+    'host rows use a .5px --dsw-alias-border-l2 separator')
+  const text = css.match(/\.pocket-row-text \{[^}]*\}/)
+  assert.ok(text, '.pocket-row-text rule present')
+  assert.match(text[0], /padding-right:\s*48px/, 'host text columns reserve 48px')
+  assert.match(css.match(/\.pocket-row-title \{[^}]*\}/)[0], /line-height:\s*22px/)
+  assert.match(css.match(/\.pocket-row-hint \{[^}]*\}/)[0], /font-size:\s*12px/,
+    'the hint must be 12px, matching every host row')
+})
+
+check('the drawer chrome is scoped and bails out while inactive', () => {
   assert.ok(css.includes('html[data-pocket="on"] .pocket-fab'), 'fab styles present and scoped')
   assert.ok(css.includes('html[data-pocket="on"] .pocket-backdrop'), 'backdrop styles present and scoped')
   // The components must additionally bail out when inactive, because a slot
