@@ -211,6 +211,38 @@ check('the drawer chrome is scoped and bails out while inactive', () => {
     'PocketChrome must return null while inactive')
 })
 
+check('the toggle button is bottom-left, hairline, and one accent colour', () => {
+  const rule = css.match(/html\[data-pocket="on"\] \.pocket-fab \{[^}]*\}/)
+  assert.ok(rule, '.pocket-fab rule present')
+  // Bottom-left, not top-left: the drawer header already carries the host's own
+  // sidebar toggle up there. Anchoring is asserted as an invariant, not a value,
+  // so changing the offset does not have to touch this test.
+  assert.match(rule[0], /bottom:\s*calc\(var\(--pocket-safe-b\)/, 'must be anchored to the bottom')
+  assert.match(rule[0], /left:\s*calc\(var\(--pocket-safe-l\)/, 'must be anchored to the left')
+  assert.ok(!/(^|\s)top:/.test(rule[0]), 'must not also be pinned to the top')
+
+  // One token drives both the border and the glyph. Two independent hex literals
+  // would drift the moment someone tweaks one of them.
+  assert.match(css, /--pocket-accent:\s*#4176e6/, 'the accent token must be the requested colour')
+  assert.match(rule[0], /border:\s*\.5px solid var\(--pocket-accent\)/, 'border uses the accent token')
+  assert.match(rule[0], /color:\s*var\(--pocket-accent\)/, 'glyph colour uses the accent token')
+  assert.equal((css.match(/#4176e6/g) || []).length, 1,
+    'the hex must appear exactly once — everywhere else goes through the token')
+})
+
+check('the toggle glyph is drawn thin, on its own grid', () => {
+  // The old icon was a 20-unit grid rendered at 20px with a 1.6 stroke; at a 28px
+  // button that reads as a solid block. Shrinking the render size alone would
+  // have scaled the stroke implicitly, so the geometry is restated explicitly.
+  const body = source.slice(source.indexOf('function MenuIcon')).slice(0, 700)
+  assert.match(body, /width: 16, height: 16/, 'glyph renders at 16px inside a 28px button')
+  assert.match(body, /viewBox: '0 0 16 16'/, 'glyph has its own 16-unit grid')
+  const stroke = body.match(/strokeWidth: ([\d.]+)/)
+  assert.ok(stroke, 'strokeWidth present')
+  assert.ok(Number(stroke[1]) <= 1.3, 'stroke must be thin (<= 1.3), got ' + stroke[1])
+  assert.match(body, /stroke: 'currentColor'/, 'glyph must inherit the accent via currentColor')
+})
+
 check('nothing closes the drawer on a click inside the panel', () => {
   // Regression guard, and the most expensive bug this plugin has shipped.
   //

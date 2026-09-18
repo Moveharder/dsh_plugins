@@ -325,6 +325,55 @@ async function runMobile(cdp, session) {
 
   expect(await evaluate(cdp, session, `!!document.querySelector('.pocket-fab')`), 'toggle button present')
 
+  // -- the toggle's shape, colour and corner --------------------------------
+  // Measured after the cascade, because the interesting failures here (a stale
+  // `top`, a token that never reached the border) are invisible in the source.
+  const fab = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-fab')
+    const r = el.getBoundingClientRect()
+    const cs = getComputedStyle(el)
+    const path = el.querySelector('svg path')
+    const pcs = path ? getComputedStyle(path) : null
+    return {
+      w: Math.round(r.width), h: Math.round(r.height),
+      left: Math.round(r.left), top: Math.round(r.top),
+      bottomGap: Math.round(window.innerHeight - r.bottom),
+      rightGap: Math.round(window.innerWidth - r.right),
+      borderColor: cs.borderTopColor, borderWidth: cs.borderTopWidth,
+      glyphColor: pcs ? pcs.stroke : null, strokeWidth: pcs ? pcs.strokeWidth : null,
+      glyphBox: el.querySelector('svg').getAttribute('width'),
+      vh: window.innerHeight, vw: window.innerWidth,
+    }
+  })()`)
+  const ACCENT = 'rgb(65, 118, 230)'   // #4176e6
+  expectEqual(fab.w, 28, 'toggle is 28px wide')
+  expectEqual(fab.h, 28, 'toggle is 28px tall')
+  // Anchored to the bottom-left corner. Asserted against the *far* edges rather
+  // than a literal offset, so the safe-area and gap tokens stay free to move.
+  expect(fab.bottomGap < fab.vh / 2 && fab.left < fab.vw / 2,
+    'toggle sits in the bottom-left quadrant', JSON.stringify(fab))
+  expect(fab.bottomGap <= 24 && fab.left <= 24,
+    'toggle hugs the bottom-left corner (within its 10px gap)', JSON.stringify(fab))
+  expectEqual(fab.borderColor, ACCENT, 'border uses the #4176e6 accent')
+  expectEqual(fab.glyphColor, ACCENT, 'glyph uses the #4176e6 accent')
+  // Chrome reports the *used* border width, so the declared .5px comes back as
+  // 1px. The declared hairline is asserted in the smoke test; here we only care
+  // that it did not become a heavy frame.
+  expect(parseFloat(fab.borderWidth) <= 1, 'border stays a hairline',
+    'used border-width=' + fab.borderWidth)
+  expectEqual(fab.glyphBox, '16', 'glyph renders at 16px inside the 28px button')
+  // Computed stroke-width comes back with a unit ("1.25px"), so parseFloat it.
+  expect(parseFloat(fab.strokeWidth) <= 1.3, 'glyph stroke is thin, not a block',
+    'strokeWidth=' + fab.strokeWidth)
+  // A 28px control is below the 44px touch-target guideline, so it must at least
+  // be genuinely hittable at its centre — checked by the click below.
+  expect(await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-fab')
+    const r = el.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return !!(hit && el.contains(hit))
+  })()`), 'toggle is hit-testable at its centre')
+
   if (SCREENSHOT_DIR) {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, session)
     await fs.writeFile(path.join(SCREENSHOT_DIR, 'pocket-mobile.png'), Buffer.from(shot.data, 'base64'))

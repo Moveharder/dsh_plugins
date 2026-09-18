@@ -178,7 +178,7 @@ html[data-pocket="on"][data-pocket-drawer="open"] [data-pocket-sidebar] { left: 
 **为什么用 `position:absolute` 而不是 `fixed`**：`fixed` 的包含块是视口，一旦祖先出现 `transform`/`filter`/`contain` 就会被改写并遭 `overflow:hidden` 裁剪；`absolute` 相对 `position:relative` 的 frame 定位，frame 就是整屏，行为确定。这也是用户手册踩坑 #10 的正确解法（该处结论"用 portal"对**浮层**成立，对**需要复用宿主内容的抽屉**不适用——抽屉必须就地改造宿主节点）。
 
 配套三件事：
-- **遮罩 + 悬浮按钮**注册进 `shell.overlay`（React 组件，`pointer-events` 由宿主的 `.overlayLayer>*` 规则自动开启），遮罩 `z-index:20` 天然位于抽屉之下。
+- **遮罩 + 悬浮按钮**注册进 `shell.overlay`（React 组件，`pointer-events` 由宿主的 `.overlayLayer>*` 规则自动开启），遮罩 `z-index:20` 天然位于抽屉之下。悬浮按钮放在**左下角**：抽屉头部本来就有宿主自己的侧栏开关，再在左上角放一个会被读成重复入口；左下角也是拇指自然停留的位置。规格是 28px、`.5px` 描边、16px 细笔画图标，描边与图标共用 `--pocket-accent`（`#4176e6`）——**一个 token 驱动两处**，否则两个独立的十六进制字面量迟早会漂移。
 - **收起只有一个权威入口**：宿主自带的 `aria-label="收起侧边栏"` 按钮。我们不拦截面板内的任何点击，只通过 `syncDrawerWithHost()` 采纳宿主自己折叠侧栏的结果（§8.9）。遮罩点击关闭仍然保留——它在面板**外面**，是移动端通用的"点外部关闭"手势。
 - **`prefers-reduced-motion` 时禁用过渡**。
 
@@ -441,9 +441,9 @@ if (!hostSidebarCollapsed()) toggleHostSidebar()
 
 | 层 | 工具 | 结果 |
 | --- | --- | --- |
-| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **22/22** |
+| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **24/24** |
 | Host 路由 + 在线升级全链路（离线） | `scripts/smoke-host.js` | **14/14** |
-| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 / 行度量 | `scripts/verify-cdp.mjs` | **60/60** |
+| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 / 行度量 | `scripts/verify-cdp.mjs` | **71/71** |
 
 §8.5、§8.6、§8.8、§8.9 四个线上缺陷都补了**能失败的**回归断言，不是事后描述：
 
