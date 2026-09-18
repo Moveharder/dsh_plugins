@@ -374,6 +374,23 @@ async function runMobile(cdp, session) {
     return !!(hit && el.contains(hit))
   })()`), 'toggle is hit-testable at its centre')
 
+  // The conversation header used to reserve 52px on the left to clear the toggle
+  // while it sat in the top-left corner. Now that the toggle is at the bottom,
+  // that reservation is dead weight and the title must get the ordinary inset
+  // back — the safe-area inset is 0 in the emulator, so this reads the plain 12px.
+  const header = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('[data-pocket-center] header')
+    if (!el) return null
+    const cs = getComputedStyle(el)
+    return { left: cs.paddingLeft, minHeight: cs.minHeight }
+  })()`)
+  if (!header) {
+    record(false, 'conversation header is reachable', 'no [data-pocket-center] header')
+  } else {
+    expectEqual(header.left, '12px',
+      'header keeps no dead reservation for a button that moved away')
+  }
+
   if (SCREENSHOT_DIR) {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, session)
     await fs.writeFile(path.join(SCREENSHOT_DIR, 'pocket-mobile.png'), Buffer.from(shot.data, 'base64'))
