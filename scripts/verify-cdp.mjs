@@ -154,6 +154,26 @@ async function clickElement(cdp, session, selector, fx = 0.5, fy = 0.5) {
   return box
 }
 
+/**
+ * Dispatch a real click at viewport coordinates, after asserting that something
+ * matching `expect` is what would receive it. Used where the target is best
+ * identified by position (an indexed row) rather than by a selector.
+ */
+async function clickPoint(cdp, session, x, y, expect) {
+  const hit = await evaluate(cdp, session, `(() => {
+    const el = document.elementFromPoint(${x}, ${y})
+    return !!(el && el.closest(${JSON.stringify(expect)}))
+  })()`)
+  if (!hit) throw new Error('nothing matching ' + expect + ' is hit-testable at ' + x + ',' + y)
+
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await cdp.send('Input.dispatchMouseEvent', {
+      type, x, y, button: 'left', clickCount: 1,
+    }, session)
+  }
+  await sleep(400)
+}
+
 // ---------------------------------------------------------------------------
 // assertions
 // ---------------------------------------------------------------------------
@@ -343,6 +363,93 @@ async function runMobile(cdp, session) {
   })()`)
   expect(stacking.drawerZ > stacking.backZ, 'drawer stacks above the backdrop', JSON.stringify(stacking))
   expect(stacking.backHits, 'backdrop is hit-testable outside the drawer', JSON.stringify(stacking))
+
+  // -- tapping inside the panel must not close it ---------------------------
+  // The workspace panel is a tree of [role="treeitem"] rows. An earlier cut
+  // closed the drawer from a capture-phase click listener keyed on a broad
+  // "interactive" selector (a[href], button, [role=treeitem], …), so *every*
+  // tap in the panel dismissed it — the panel was effectively read-only.
+  //
+  // Pick a *collapsed* row so the tap has an observable host-side effect: the
+  // host flips its aria-expanded to true. Asserting only "the drawer stayed
+  // open" would also pass on a panel that had gone inert, which is the other
+  // way this can break.
+  const ROW = '[data-pocket-sidebar] [role="treeitem"]'
+  const row = await evaluate(cdp, session, `(() => {
+    const rows = [...document.querySelectorAll(${JSON.stringify(ROW)})]
+    const i = rows.findIndex((el) => {
+      const r = el.getBoundingClientRect()
+      return el.getAttribute('aria-expanded') === 'false' && r.width >= 2 && r.height >= 2
+    })
+    if (i === -1) return null
+    const r = rows[i].getBoundingClientRect()
+    return { i, text: (rows[i].textContent || '').trim().slice(0, 24),
+             x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })()`)
+  if (!row) {
+    record(false, 'a collapsed workspace row is reachable inside the drawer',
+      'no visible [role="treeitem"][aria-expanded="false"] found')
+  } else {
+    await clickPoint(cdp, session, row.x, row.y, ROW)
+    await sleep(500)
+    expectEqual(await evaluate(cdp, session, `(() => {
+      const el = [...document.querySelectorAll(${JSON.stringify(ROW)})][${row.i}]
+      return el ? el.getAttribute('aria-expanded') : null
+    })()`), 'true', 'the tap reached the host: the workspace row expanded (row: ' + row.text + ')')
+    expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
+      'tapping a workspace row inside the drawer leaves it open (row: ' + row.text + ')')
+  }
+
+  // -- the host's own 收起侧边栏 button is the drawer's close control --------
+  // We do not intercept clicks in the panel; the host collapses its sidebar and
+  // the reconciler adopts that state. The label is the host's, so accept either
+  // locale and fail loudly (with the labels actually present) rather than skip.
+  const COLLAPSE = '[data-pocket-sidebar] [aria-label="收起侧边栏"], [data-pocket-sidebar] [aria-label="Collapse sidebar"]'
+  const collapse = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector(${JSON.stringify(COLLAPSE)})
+    if (!el) {
+      return { missing: true, labels: [...document.querySelectorAll('[data-pocket-sidebar] [aria-label]')]
+        .map((e) => e.getAttribute('aria-label')).slice(0, 12) }
+    }
+    const r = el.getBoundingClientRect()
+    return { w: Math.round(r.width), h: Math.round(r.height) }
+  })()`)
+  if (collapse.missing || collapse.w < 2) {
+    record(false, 'the host sidebar-collapse control is reachable in the drawer',
+      collapse.missing ? 'not found; labels present: ' + JSON.stringify(collapse.labels)
+        : 'found but zero-sized: ' + JSON.stringify(collapse))
+  } else {
+    // Guard against a vacuous pass: the assertions below are only meaningful if
+    // the drawer was open going in.
+    expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
+      'drawer is open before the collapse-button click (guards a vacuous pass)')
+
+    await clickElement(cdp, session, COLLAPSE)
+    await sleep(700)
+    expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), null,
+      'the host 收起侧边栏 button closes the drawer')
+
+    // The host collapsed the sidebar itself. If our close path also called
+    // layout.toggleSidebar() the two toggles would cancel out, leaving the host
+    // expanded behind a drawer that had already slid away.
+    expectEqual(await evaluate(cdp, session,
+      `document.querySelector('[data-pocket-frame]').hasAttribute('data-sidebar-collapsed')`), true,
+      'the host sidebar stays collapsed after its own button was used')
+
+    const afterCollapse = await evaluate(cdp, session,
+      `Math.round(document.querySelector('[data-pocket-sidebar]').getBoundingClientRect().right)`)
+    expect(afterCollapse <= 1, 'drawer returned off-screen after the collapse button', String(afterCollapse))
+  }
+
+  // -- and it must still open again afterwards ------------------------------
+  // Adopting the host's collapse must not wedge the drawer shut.
+  await clickElement(cdp, session, '.pocket-fab')
+  await sleep(700)
+  expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
+    'the drawer reopens after being closed with the host button')
+  expect(!(await evaluate(cdp, session,
+    `document.querySelector('[data-pocket-frame]').hasAttribute('data-sidebar-collapsed')`)),
+    'reopening asks the host to expand the sidebar again')
 
   // -- close via backdrop ---------------------------------------------------
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',

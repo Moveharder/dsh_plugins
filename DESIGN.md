@@ -164,21 +164,22 @@ const MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)'
 html[data-pocket="on"] [data-pocket-frame] {
   grid-template-columns: minmax(0, 1fr) 0 0 !important;   /* 压掉侧栏与右栏轨道 */
 }
-html[data-pocket="on"] [data-pocket-frame] > [data-pocket-sidebar] {
-  position: absolute; inset: 0 auto 0 0;
-  width: min(84vw, 320px);
-  transform: translateX(-100%);
-  transition: transform .25s var(--ds-ease-in-out);
+html[data-pocket="on"] [data-pocket-sidebar] {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: calc(-1 * var(--pocket-drawer-w));                 /* 不是 transform，见 §8.1 */
+  width: var(--pocket-drawer-w);
+  transition: left .25s var(--ds-ease-in-out);
   z-index: 30;                                            /* > overlay layer 的 20 */
 }
-html[data-pocket="on"][data-pocket-drawer="open"] [data-pocket-sidebar] { transform: none; }
+html[data-pocket="on"][data-pocket-drawer="open"] [data-pocket-sidebar] { left: 0; }
 ```
 
 **为什么用 `position:absolute` 而不是 `fixed`**：`fixed` 的包含块是视口，一旦祖先出现 `transform`/`filter`/`contain` 就会被改写并遭 `overflow:hidden` 裁剪；`absolute` 相对 `position:relative` 的 frame 定位，frame 就是整屏，行为确定。这也是用户手册踩坑 #10 的正确解法（该处结论"用 portal"对**浮层**成立，对**需要复用宿主内容的抽屉**不适用——抽屉必须就地改造宿主节点）。
 
 配套三件事：
 - **遮罩 + 悬浮按钮**注册进 `shell.overlay`（React 组件，`pointer-events` 由宿主的 `.overlayLayer>*` 规则自动开启），遮罩 `z-index:20` 天然位于抽屉之下。
-- **点会话行自动收起**：在 frame 上做事件委托，命中 `[data-pocket-sidebar]` 内的可点击行且抽屉开着 → 关抽屉。
+- **收起只有一个权威入口**：宿主自带的 `aria-label="收起侧边栏"` 按钮。我们不拦截面板内的任何点击，只通过 `syncDrawerWithHost()` 采纳宿主自己折叠侧栏的结果（§8.9）。遮罩点击关闭仍然保留——它在面板**外面**，是移动端通用的"点外部关闭"手势。
 - **`prefers-reduced-motion` 时禁用过渡**。
 
 ### 3.3 底部 sheet：靠 ARIA 语义而不是哈希
@@ -378,19 +379,78 @@ CDP 实测对比：
 
 ---
 
+### 8.9 点面板里任何地方都会收起抽屉（v0.1.2 线上缺陷）
+
+**症状**：移动端展开工作区面板后，**点面板里几乎任何位置都会把面板收起来**，面板实际上是只读的，完全没法操作。
+
+**根因**：我在 sidebar 上挂了一个**捕获阶段**的点击监听器，用一张宽泛的"可交互元素"选择器猜"用户点完了该收起来了"：
+
+```js
+const ACTIVATE_SELECTOR = 'a[href], button, [role="button"], [role="option"], [role="treeitem"], [role="menuitem"]'
+if (target.closest(ACTIVATE_SELECTOR)) setDrawerOpen(false)
+```
+
+而工作区面板**本身就是一棵 `[role="treeitem"]` 的行树**（会话行、工作区分组、文件夹行全是），所以用户的每一次点击都命中——"点哪儿都关"不是夸张，是字面事实。
+
+**那个排除列表才是真正的信号**。我当时已经发现"展开/折叠按钮和 kebab 菜单不该关抽屉"，于是又加了一张 `KEEP_OPEN_SELECTOR` 例外表。**一条需要不断追加例外的规则，就是错的规则**——例外表在增长，说明抽象选错了，而不是选得不够细。
+
+CDP 实测（修复前）：
+
+| 点击位置 | `data-pocket-drawer` |
+| --- | --- |
+| 面板内的一行会话（`[role=treeitem]`） | `null`（被关掉） |
+| 面板内 8px 的非交互空隙 | `open`（保持） |
+
+也就是说：**凡是用户真会碰到的像素，都会关**。
+
+**顺带暴露的第二个缺陷**：捕获监听器比宿主按钮自己的 `onClick` 先跑，那一刻宿主**还没折叠**，于是 `hostSidebarCollapsed()` 为 false → 我们调 `layout.toggleSidebar()` 折叠 → 宿主按钮自己的处理器紧接着又 toggle 一次 → **折叠被撤销**。实测 `collapsed attr after = false`：抽屉滑走了，宿主却仍是展开态，那个按钮看起来像坏了。
+
+**对策**：整条启发式删掉，不猜。收起的权威入口就是宿主自带的 `aria-label="收起侧边栏"` 按钮——宿主折叠侧栏，我们通过 `syncDrawerWithHost()` **采纳**这个结果：
+
+```js
+function syncDrawerWithHost() {
+    if (!drawerStore.get()) { awaitingExpand = false; return }
+    if (!hostSidebarCollapsed()) { awaitingExpand = false; return }
+    if (awaitingExpand) return          // 是我们自己请求的展开还没落地
+    setDrawerOpen(false)
+}
+```
+
+`awaitingExpand` 是必需的：打开抽屉时我们**请求**宿主展开侧栏，在这个请求落地前宿主本来就还是折叠态——若不区分，这次"折叠"会被误判成用户收起，抽屉会在打开后立刻自己弹回去。
+
+关闭路径只有一条守卫，覆盖所有调用方（遮罩 / Esc / 采纳宿主）：
+
+```js
+if (!hostSidebarCollapsed()) toggleHostSidebar()
+```
+
+宿主已经折叠了就不再 toggle，所以不需要给 `setDrawerOpen` 加一个"这是采纳"的模式参数。我一度加了 `adopt` 标志，实测证明**它不可能改变任何行为**（走到采纳分支时 `hostSidebarCollapsed()` 必然为真），于是删掉——**看起来承重、实际不承重的机关，比没有机关更糟**。
+
+**A/B 证据**（两条断言都确认能红）：
+
+| 退回的改动 | 断言 | 结果 |
+| --- | --- | --- |
+| 重新装上捕获监听器 | `tapping a session row inside the drawer leaves it open` | `expected "open", got null` |
+| 注释掉 `syncDrawerWithHost()` | `the host 收起侧边栏 button closes the drawer` | `expected null, got "open"` |
+
+**没被推翻但值得记一笔的误判**：用户最初怀疑是遮罩盖住了面板。探针在面板内取三点做 `elementFromPoint`，全部命中面板自身内容（`isBackdrop: false`），遮罩在 `z-index:20`、抽屉 `30`，层叠本来就是对的。**先量再改**——如果照着这个猜测去调遮罩的 `z-index`，真正的监听器会原封不动地留着。
+
+---
+
 ## 9. 验证结果
 
 | 层 | 工具 | 结果 |
 | --- | --- | --- |
-| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **20/20** |
+| Client bundle 契约 + 样式表不变量 | `scripts/smoke-client.js` | **22/22** |
 | Host 路由 + 在线升级全链路（离线） | `scripts/smoke-host.js` | **14/14** |
-| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 / 行度量 | `scripts/verify-cdp.mjs` | **53/53** |
+| 真实 DOM / 几何 / 层叠 / 命中测试 / 滚动 / 行度量 | `scripts/verify-cdp.mjs` | **60/60** |
 
-§8.5 与 §8.6 两个线上缺陷都补了**能失败的**回归断言，不是事后描述：
+§8.5、§8.6、§8.8、§8.9 四个线上缺陷都补了**能失败的**回归断言，不是事后描述：
 
 - `unload releases the route so a hot remount works` —— 让 fake `webServer` 像真的一样在重复注册时抛错，然后模拟卸载再挂载。修复前必红。
 - `settings content is scrollable` —— 在真实浏览器里**执行一次滚动**并断言 `scrollTop` 变化；找不到可滚动后代时打印最高后代的 `scrollHeight/clientHeight` 供定位。已用 A/B 确认退回修复必红（见 §8.6）。
 - `settings row padding matches its neighbours`（桌面端）—— 与邻行比对而非硬编码，见 §8.8。
+- `tapping a session row inside the drawer leaves it open` + `the host 收起侧边栏 button closes the drawer` —— 一条断言"面板内点击不得关闭"，一条断言"宿主按钮必须关闭"。两条都已用 A/B 确认退回修复必红（见 §8.9）。源码级守卫 `nothing closes the drawer on a click inside the panel` 直接禁止再出现 `addEventListener('click', …)`，同样验证过会红。
 
 CDP 探针覆盖三种视口：移动端 390×844（触摸模拟）、窄桌面 900×800、桌面 1280×800。桌面两种宽度都断言了零地标残留、零注入控件、宿主网格未被改动。
 

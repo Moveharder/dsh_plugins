@@ -211,6 +211,51 @@ check('the drawer chrome is scoped and bails out while inactive', () => {
     'PocketChrome must return null while inactive')
 })
 
+check('nothing closes the drawer on a click inside the panel', () => {
+  // Regression guard, and the most expensive bug this plugin has shipped.
+  //
+  // The first cut closed the drawer from a capture-phase click listener on the
+  // sidebar whenever the target matched a broad "interactive" selector
+  // (a[href], button, [role=treeitem], …). The workspace panel is a tree of
+  // [role="treeitem"] rows, so in practice *every* tap inside the panel closed
+  // it: selecting a session, opening a folder, scrolling. Probe measured
+  // `drawer attr after tapping the row = null` on a plain session row.
+  //
+  // The exclusion list bolted onto that heuristic was the tell: a rule that
+  // needs an ever-growing list of exceptions is the wrong rule. Tapping a
+  // session row must select the session, and the drawer's close control is the
+  // host's own 收起侧边栏 button — which we follow (syncDrawerWithHost) rather
+  // than race.
+  assert.ok(!/addEventListener\(\s*['"]click['"]/.test(source),
+    'no click listener may be installed to infer "the user is done" from a tap')
+  assert.ok(source.includes('function syncDrawerWithHost'),
+    'the host sidebar state must be adopted as the drawer close signal')
+  const reconcile = source.slice(source.indexOf('function reconcile()'))
+  assert.match(reconcile.slice(0, 400), /syncDrawerWithHost\(\)/,
+    'syncDrawerWithHost must run on every reconcile pass')
+})
+
+check('closing the drawer never toggles a sidebar the host already collapsed', () => {
+  // The host's 收起侧边栏 button collapses the sidebar itself and the reconciler
+  // adopts that as "the drawer is closed". If the close path also called
+  // layout.toggleSidebar(), the two toggles would cancel out and the host would
+  // end up expanded behind a drawer that had already slid away.
+  //
+  // The guard is what makes that safe, and it is deliberately unconditional —
+  // it covers the backdrop and Escape paths too, so no caller has to declare
+  // which kind of close it is.
+  const setter = source.slice(source.indexOf('function setDrawerOpen'))
+  const closePath = setter.slice(setter.indexOf("removeAttribute('data-pocket-drawer')"), setter.indexOf('\n        }'))
+  assert.match(closePath, /if \(!hostSidebarCollapsed\(\)\) toggleHostSidebar\(\)/,
+    'the close path must only toggle the host when the host is still expanded')
+  assert.ok(!/options/.test(setter.slice(0, 120)),
+    'setDrawerOpen must not grow a mode flag: the state guard already covers every caller')
+
+  const adopt = source.slice(source.indexOf('function syncDrawerWithHost'))
+  assert.match(adopt.slice(0, 700), /setDrawerOpen\(false\)/,
+    'syncDrawerWithHost must close through the ordinary path')
+})
+
 check('host class names are never used as selectors', () => {
   // The host emits content-hashed class names (pI_x6G_frame, wSkVaW_header) that
   // change on every build. We must select on data-slot / ARIA / our own tags.
