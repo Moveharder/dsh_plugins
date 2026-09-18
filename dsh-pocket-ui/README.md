@@ -133,21 +133,26 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-node scripts/smoke-client.js     # 18 项：bundle 契约 + 样式表不变量
+node scripts/smoke-client.js     # 20 项：bundle 契约 + 样式表不变量
 node scripts/smoke-host.js       # 14 项：路由 + 在线升级全链路（离线可跑）
 node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screenshot ./shots
 ```
 
-CDP 探针（43 项断言）是唯一能验证真实 DOM、计算后几何与层叠的方式：
+CDP 探针（53 项断言）是唯一能验证真实 DOM、计算后几何与层叠的方式：
 
 - **移动端**（390×844 + 触摸模拟）：门控开启、样式注入、地标打标、viewport meta、网格塌缩、抽屉开合、遮罩可点、sheet 贴底全宽且**不被困在抽屉里**、**内容真的能滚动**、无幽灵滚动、状态行渲染
-- **窄桌面**（900×800，鼠标）+ **桌面**（1280×800）：门控关闭、零地标残留、零注入控件、宿主网格未被改动、侧栏未被改成抽屉
+- **窄桌面**（900×800，鼠标）+ **桌面**（1280×800）：门控关闭、零地标残留、零注入控件、宿主网格未被改动、侧栏未被改成抽屉、**设置行度量与邻行一致**
 
 > headless Chrome **没有任何指针设备**，三个 `(pointer: …)` 查询全为 false。必须用
 > `Emulation.setTouchEmulationEnabled` 才能让 `(pointer: coarse)` 命中——
 > `Emulation.setEmulatedMedia` 对指针特征**静默无效**。
 
 ## 更新记录
+
+### v0.1.2
+
+- **设置页的状态行在桌面端不再是无样式的裸 HTML**。之前把行样式也锁进了 `html[data-pocket="on"]`，而设置槽位在任何宽度都会被宿主渲染，于是桌面端没有内边距、没有分隔线、说明文字是 14px。现在行样式不门控，度量照抄宿主官方行（`.5px solid var(--dsw-alias-border-l2)`、`16px 0`、标题 14/22、说明 12/18）。
+- 状态行文案改短：「当前 v0.1.1 · 最新 v0.1.1」→「v0.1.1 · 已是最新」；有更新时显示「可升级到 vX.Y.Z」。
 
 ### v0.1.1
 

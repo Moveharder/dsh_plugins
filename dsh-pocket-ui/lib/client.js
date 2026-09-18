@@ -276,9 +276,15 @@ html[data-pocket="on"] [data-composer-input] textarea {
 }
 
 /* ------------------------------------------------ our own chrome */
-/* Scoped like everything else, so the desktop no-op invariant holds for the
-   whole sheet: no rule matches unless we turned the gate on. The components
-   additionally return null while inactive — belt and braces. */
+/* Two different scoping rules live here, and conflating them caused a real bug.
+   The drawer toggle and its backdrop only render while mobile mode is active
+   (the component returns null otherwise), so scoping them is belt-and-braces.
+   The settings row is different: the settings.general.item slot is rendered by
+   the host at EVERY width, so its rules must stay unscoped — scoping them left
+   the row as bare unstyled HTML on desktop (no padding, no separator, 14px hint
+   text where the host uses 12px).
+   Rule of thumb: scope what rewrites the host; do not scope what styles chrome
+   that exists in both modes. */
 html[data-pocket="on"] .pocket-fab {
   position: fixed;
   top: calc(var(--pocket-safe-t) + var(--pocket-fab-gap));
@@ -310,38 +316,56 @@ html[data-pocket="on"] .pocket-backdrop {
   -webkit-tap-highlight-color: transparent;
 }
 
-html[data-pocket="on"] .pocket-row {
+/* The settings row. Unscoped on purpose — see the note above. Metrics are copied
+   from the host's own general-settings rows so this one does not look like a
+   foreign body: a .5px solid var(--dsw-alias-border-l2) separator, 16px 0
+   padding, a text column with 48px right padding, 14px/22px title and
+   12px/18px hint. The host's GeneralSection strips the separator from the last
+   row via its ":last-child { border-bottom: none }" rule, which covers this too. */
+.pocket-row {
   display: flex;
+  flex-direction: row;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
-  padding: 10px 0;
+  padding: 16px 0;
+  border-bottom: .5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, .1));
 }
-html[data-pocket="on"] .pocket-row-text { flex: 1; min-width: 0; }
-html[data-pocket="on"] .pocket-row-title {
+.pocket-row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+  padding-right: 48px;
+}
+.pocket-row-title {
   color: var(--dsw-alias-label-primary, inherit);
   font-size: 14px;
   line-height: 22px;
 }
-html[data-pocket="on"] .pocket-row-hint {
+.pocket-row-hint {
   color: var(--dsw-alias-label-tertiary, rgba(128, 128, 128, 1));
   font-size: 12px;
   line-height: 18px;
   overflow-wrap: anywhere;
 }
-html[data-pocket="on"] .pocket-row button {
+.pocket-row button {
   flex: none;
-  height: 28px;
-  padding: 0 12px;
-  border: .5px solid var(--dsw-alias-border-l3, rgba(128, 128, 128, .3));
-  border-radius: 14px;
+  height: 32px;
+  padding: 0 14px;
+  border: .5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, .1));
+  border-radius: 16px;
   background: transparent;
   color: var(--dsw-alias-label-primary, inherit);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 22px;
+  white-space: nowrap;
   cursor: pointer;
 }
-html[data-pocket="on"] .pocket-row button:disabled { opacity: .5; cursor: default; }
+.pocket-row button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, .1)); }
+.pocket-row button:disabled { opacity: .5; cursor: default; }
 `
 
         // =====================================================================
@@ -608,9 +632,14 @@ html[data-pocket="on"] .pocket-row button:disabled { opacity: .5; cursor: defaul
             }
 
             const version = meta && meta.version ? 'v' + meta.version : 'host 半区未就绪'
-            const latest = meta && meta.latest ? 'v' + meta.latest : '未检测'
             const upgrade = (meta && meta.upgrade) || {}
             const updateAvailable = !!(meta && meta.updateAvailable)
+
+            // Say the state, not two version numbers that are usually identical.
+            let latestText
+            if (updateAvailable) latestText = '可升级到 v' + meta.latest
+            else if (meta && meta.latest) latestText = '已是最新'
+            else latestText = '未检测更新'
 
             let action
             if (busy || upgrade.running) {
@@ -625,7 +654,8 @@ html[data-pocket="on"] .pocket-row button:disabled { opacity: .5; cursor: defaul
 
             const hint = [
                 active ? '移动端布局生效中' : '桌面端（未启用）',
-                '当前 ' + version + ' · 最新 ' + latest,
+                version,
+                latestText,
             ]
             if (upgrade.message) hint.push(upgrade.message)
 

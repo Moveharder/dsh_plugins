@@ -44,6 +44,10 @@ if (!URL_UNDER_TEST) {
 const SCREENSHOT_DIR = arg('screenshot')
 const CHROME = arg('chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
 
+/** Expected plugin version, read from package.json — never hardcode it. */
+const PKG_VERSION = JSON.parse(
+  await fs.readFile(new URL('../package.json', import.meta.url), 'utf8')).version
+
 // ---------------------------------------------------------------------------
 // minimal CDP client
 // ---------------------------------------------------------------------------
@@ -449,7 +453,10 @@ async function runMobile(cdp, session) {
         record(false, 'status row contributed to settings.general.item', 'not found')
       } else {
         expect(/Pocket UI/.test(row.text), 'status row rendered in General settings', row.text)
-        expect(/v0\.1\.0/.test(row.text), 'status row shows the host half version', row.text)
+        // Read the expected version from package.json: a hardcoded literal turns
+        // every release into a false failure.
+        expect(row.text.includes('v' + PKG_VERSION),
+          'status row shows the host half version', 'expected v' + PKG_VERSION + ' in: ' + row.text)
         expect(row.w <= row.vw, 'status row fits the sheet width', JSON.stringify(row))
 
         if (SCREENSHOT_DIR) {
@@ -505,6 +512,71 @@ async function runDesktop(cdp, session, { label, width, height }) {
     return { position: cs.position, transform: cs.transform }
   })()`)
   expect(sidebar && sidebar.position === 'static', 'sidebar is not turned into a drawer', JSON.stringify(sidebar))
+
+  // The settings row is host chrome rendered at every width, so it must look
+  // native here too. Compare it against its own neighbours rather than against
+  // hardcoded numbers: consistency with the surrounding rows is the requirement,
+  // and this stays honest if the host restyles its list.
+  await evaluate(cdp, session, `(() => {
+    const t = document.querySelector('[data-slot="settings.trigger"] button, [data-slot="settings.trigger"]')
+    if (t) t.click()
+    return !!t
+  })()`)
+  await sleep(900)
+
+  const rows = await evaluate(cdp, session, `(() => {
+    const anchors = [...document.querySelectorAll('[data-slot="settings.general.item"]')]
+    const all = anchors.flatMap((a) => [...a.children])
+    const mine = all.find((el) => el.classList.contains('pocket-row'))
+    const hosts = all.filter((el) => el !== mine && !el.classList.contains('pocket-row'))
+    const measure = (el) => {
+      const cs = getComputedStyle(el)
+      const leaf = (sel) => {
+        const n = el.querySelector(sel)
+        if (!n) return null
+        const s = getComputedStyle(n)
+        return { fontSize: s.fontSize, lineHeight: s.lineHeight }
+      }
+      return { display: cs.display, padding: cs.padding, gap: cs.gap,
+               title: leaf('.pocket-row-title'), hint: leaf('.pocket-row-hint') }
+    }
+    return {
+      found: !!mine,
+      mine: mine ? measure(mine) : null,
+      neighbour: hosts.length > 0 ? measure(hosts[hosts.length - 1]) : null,
+    }
+  })()`)
+
+  if (!rows.found) {
+    record(false, 'settings row present on desktop', 'no .pocket-row found in the settings list')
+  } else {
+    expect(rows.mine.display === 'flex',
+      'settings row is laid out as a row on desktop', JSON.stringify(rows.mine))
+    expect(rows.neighbour !== null && rows.mine.padding === rows.neighbour.padding,
+      'settings row padding matches its neighbours',
+      'mine=' + JSON.stringify(rows.mine) + ' neighbour=' + JSON.stringify(rows.neighbour))
+    expect(rows.neighbour !== null && rows.mine.gap === rows.neighbour.gap,
+      'settings row gap matches its neighbours',
+      'mine=' + rows.mine.gap + ' neighbour=' + (rows.neighbour && rows.neighbour.gap))
+    // The hint is the tell: unscoped it inherits the host's 14px row font.
+    expect(rows.mine.hint && rows.mine.hint.fontSize === '12px',
+      'settings row hint uses the host secondary size on desktop', JSON.stringify(rows.mine.hint))
+    expect(rows.mine.title && rows.mine.title.lineHeight === '22px',
+      'settings row title uses the host line height on desktop', JSON.stringify(rows.mine.title))
+  }
+
+  if (SCREENSHOT_DIR && label === 'desktop') {
+    const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, session)
+    await fs.writeFile(path.join(SCREENSHOT_DIR, 'pocket-desktop-settings.png'), Buffer.from(shot.data, 'base64'))
+    console.log('  ..  wrote ' + path.join(SCREENSHOT_DIR, 'pocket-desktop-settings.png'))
+  }
+
+  await evaluate(cdp, session, `(() => {
+    const d = document.querySelector('[role="presentation"] [aria-hidden="true"]')
+    if (d) d.click()
+    return true
+  })()`)
+  await sleep(400)
 
   if (SCREENSHOT_DIR && label === 'desktop') {
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' }, session)
