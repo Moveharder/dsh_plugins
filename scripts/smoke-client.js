@@ -28,6 +28,28 @@ function check(label, fn) {
 }
 
 // --------------------------------------------------------------------------
+// 0. source-level guards — these MUST run before the bundle is evaluated
+// --------------------------------------------------------------------------
+//
+// A guard that runs after `new Function(source)` can never fire: a syntax error
+// throws first, so the check is dead code that only looks like protection. The
+// stylesheet lives in a template literal, and a backtick inside a CSS comment
+// (easy to type when naming properties in prose) terminates the string and turns
+// the whole bundle into a syntax error — which surfaces in the browser as "no UI
+// at all" rather than as anything diagnostic. Keep this first.
+
+check('the stylesheet contains no stray backticks', () => {
+  const marker = 'const CSS = `'
+  const at = source.indexOf(marker)
+  assert.ok(at !== -1, 'CSS template literal is present')
+  const body = source.slice(at + marker.length)
+  const end = body.indexOf('\n`')
+  assert.ok(end !== -1, 'CSS template literal is terminated')
+  assert.ok(!body.slice(0, end).includes('`'),
+    'no backtick may appear inside the CSS template literal')
+})
+
+// --------------------------------------------------------------------------
 // 1. register the bundle exactly once
 // --------------------------------------------------------------------------
 
@@ -132,19 +154,6 @@ function selectorsOf(ruleHead) {
   return ruleHead.split(',').map((s) => s.trim()).filter(Boolean)
 }
 
-check('the stylesheet contains no stray backticks', () => {
-  // The CSS lives in a template literal. A backtick inside a comment — easy to
-  // type when referring to properties in prose — terminates the string and
-  // turns the whole bundle into a syntax error, which surfaces as "no UI at all"
-  // rather than as a helpful message.
-  const marker = 'const CSS = `'
-  const body = source.slice(source.indexOf(marker) + marker.length)
-  const end = body.indexOf('\n`')
-  assert.ok(end !== -1, 'CSS template literal is terminated')
-  assert.ok(!body.slice(0, end).includes('`'),
-    'no backtick may appear inside the CSS template literal')
-})
-
 check('every rule is inert unless html[data-pocket="on"]', () => {
   // The desktop no-op invariant, asserted structurally. No exceptions: even our
   // own .pocket-* chrome is scoped, so an inactive plugin contributes exactly
@@ -206,6 +215,27 @@ check('the drawer never becomes a containing block for fixed descendants', () =>
   assert.ok(!/will-change/.test(rule[0]),
     'will-change: transform creates a containing block too')
   assert.match(rule[0], /left:/, 'the drawer must slide via `left` instead')
+})
+
+check('the bottom sheet keeps its content column shrinkable', () => {
+  // Flipping the panel from row to column swaps which automatic minimum applies:
+  // `min-width:0` (which the host ships) stops mattering and `min-height:auto`
+  // takes over, refusing to shrink below content. The column then overflows the
+  // panel's max-height, the panel clips it (`overflow:hidden`), and the inner
+  // scroller never gets a bounded height — the settings page cannot scroll.
+  const rule = css.match(/html\[data-pocket="on"\] \[role="presentation"\] > \[role="dialog"\]\[aria-modal="true"\] > nav \+ \*[^{]*\{[^}]*\}/)
+  assert.ok(rule, 'the sheet content column must be addressed explicitly')
+  assert.match(rule[0], /min-height:\s*0\s*!important/,
+    'the content column needs min-height:0 or the sheet cannot scroll')
+})
+
+check('the sheet height cap prefers dvh over vh', () => {
+  // vh measures the largest viewport, so on mobile the sheet can extend below
+  // the visible area once the URL bar is showing.
+  assert.match(css, /max-height:\s*88vh\s*!important/, 'vh fallback present')
+  assert.match(css, /max-height:\s*88dvh\s*!important/, 'dvh override present')
+  assert.ok(css.indexOf('max-height: 88vh !important') < css.indexOf('max-height: 88dvh !important'),
+    'dvh must follow the fallback so it wins where supported')
 })
 
 check('safe-area insets are consumed', () => {

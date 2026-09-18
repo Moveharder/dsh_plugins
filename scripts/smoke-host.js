@@ -74,27 +74,43 @@ async function loadHostHalf(entry) {
   return import(pathToFileURL(entry).href + '?v=' + importSeq)
 }
 
-/** Minimal ctx capturing the registered route and intervals. */
+/** Minimal ctx capturing the registered route and disposers. */
 function makeCtx() {
   const routes = []
-  const intervals = []
   const logs = []
   const disposers = []
   return {
     routes,
-    intervals,
     logs,
     disposers,
-    webServer: { register: (route) => { routes.push(route); return () => {} } },
+    webServer: {
+      // Mirrors the real service: duplicate (kind, path) throws, and register
+      // returns the disposer that removes the route. Both halves matter — the
+      // throwing half is what made the hot-remount bug observable.
+      register(route) {
+        if (routes.some((r) => r.kind === route.kind && r.path === route.path)) {
+          throw new Error(`webserver: duplicate ${route.kind} route "${route.path}"`)
+        }
+        routes.push(route)
+        return () => {
+          const i = routes.indexOf(route)
+          if (i !== -1) routes.splice(i, 1)
+        }
+      },
+    },
     effect(fn) {
       const dispose = fn()
       if (typeof dispose === 'function') disposers.push(dispose)
       return dispose
     },
-    setInterval(fn, ms) { intervals.push({ fn, ms }); return () => {} },
     get: () => null,
     logger: { info: (m) => logs.push(m) },
   }
+}
+
+/** Run every disposer the plugin registered, as an unload would. */
+function unload(ctx) {
+  for (const dispose of ctx.disposers.splice(0)) dispose()
 }
 
 /** Minimal req/res pair. */
@@ -181,9 +197,53 @@ try {
     assert.equal(ctx.routes[0].path, '/pocket')
   })
 
-  await check('schedules a periodic update re-check', () => {
-    assert.equal(ctx.intervals.length, 1)
-    assert.equal(ctx.intervals[0].ms, 6 * 3600 * 1000)
+  await check('schedules a periodic update re-check that unload clears', () => {
+    // The interval is a raw timer owned by ctx.effect (house style in the core
+    // packages). Spy on the globals to prove it is both created and cleared —
+    // `ctx.setInterval` would bind to the timer service's fiber, not ours, and
+    // outlive the plugin.
+    const realSet = globalThis.setInterval
+    const realClear = globalThis.clearInterval
+    const created = []
+    const cleared = []
+    globalThis.setInterval = (fn, ms) => { const h = { fn, ms, unref() {} }; created.push(h); return h }
+    globalThis.clearInterval = (h) => { cleared.push(h) }
+    try {
+      const spyCtx = makeCtx()
+      const spyMod = mod
+      spyMod.apply(spyCtx)
+      assert.equal(created.length, 1, 'exactly one interval created')
+      assert.equal(created[0].ms, 6 * 3600 * 1000)
+      unload(spyCtx)
+      assert.equal(cleared.length, 1, 'the interval must be cleared on unload')
+      assert.equal(cleared[0], created[0], 'the same timer handle is cleared')
+    } finally {
+      globalThis.setInterval = realSet
+      globalThis.clearInterval = realClear
+    }
+  })
+
+  await check('unload releases the route so a hot remount works', async () => {
+    // Reproduces the reported failure. `webServer.register` is a service method,
+    // so its disposer is NOT tracked by ctx — discarding it left the route in the
+    // table and the next mount died with:
+    //   webserver: duplicate prefix route "/pocket"
+    const remount = await makeProfile({ dependencySpec: '^0.0.1' })
+    const m = await loadHostHalf(remount.entry)
+    const c = makeCtx()
+
+    m.apply(c)
+    assert.equal(c.routes.length, 1, 'first mount registers the route')
+
+    unload(c)
+    assert.equal(c.routes.length, 0, 'unload must release the route')
+
+    // Same context again: would throw "duplicate prefix route" if it leaked.
+    m.apply(c)
+    assert.equal(c.routes.length, 1, 'second mount registers cleanly')
+
+    unload(c)
+    assert.equal(c.routes.length, 0, 'second unload also releases')
   })
 
   await check('GET /pocket/hello reports the package version', async () => {
