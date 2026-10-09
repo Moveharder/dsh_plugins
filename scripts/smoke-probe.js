@@ -309,6 +309,12 @@ function makeDom(cfg) {
     documentElement: html,
     head,
     body,
+    /**
+     * The probe resolves the host routes document-relative, so a stub without a
+     * base URI is not a faithful browser: every `/pocket/*` URL would come out
+     * relative and hide the very resolution rule these tests exist to pin down.
+     */
+    baseURI: cfg.baseURI !== undefined ? cfg.baseURI : 'http://192.168.1.210:3080/',
     createElement: (tag) => el(tag),
     querySelector(sel) {
       if (sel === 'meta[name="viewport"]') return { getAttribute: () => cfg.viewportMeta || 'width=device-width, initial-scale=1, viewport-fit=cover' }
@@ -327,8 +333,19 @@ function makeDom(cfg) {
     run(boot) {
       // eslint-disable-next-line no-new-func
       const fn = new Function('window', 'document', 'getComputedStyle', 'navigator', 'screen', 'location', 'console', source)
-      fn(window, document, window.getComputedStyle, window.navigator,
-        { width: 1080, height: 2243, availHeight: 2243 }, window.location, console)
+      // The shell publishes its transport on `globalThis`, which in a browser page
+      // IS `window`; the harness runs the probe with `window` as a *parameter*, so
+      // the global has to be staged around the call to stay faithful.
+      const prevTransport = globalThis.__DSH_TRANSPORT__
+      if (cfg.transport) globalThis.__DSH_TRANSPORT__ = cfg.transport
+      else delete globalThis.__DSH_TRANSPORT__
+      try {
+        fn(window, document, window.getComputedStyle, window.navigator,
+          { width: 1080, height: 2243, availHeight: 2243 }, window.location, console)
+      } finally {
+        if (prevTransport === undefined) delete globalThis.__DSH_TRANSPORT__
+        else globalThis.__DSH_TRANSPORT__ = prevTransport
+      }
       return window.__pocket
     },
   }
@@ -481,6 +498,49 @@ check('a phantom outer scroll is reported', () => {
   assert.equal(o2.scroll.phantomScroll, 56, 'a document taller than the viewport is reported')
   assert.ok(o2.verdict.warnings.some((w) => w.includes('beyond the viewport')),
     'and it warns, because that is the bottom-inset bug')
+})
+
+check('the probe resolves /pocket/hello the same way the bundle does', () => {
+  // The probe carries its own resolver (it is a separate file and cannot import
+  // the bundle's), so the two can drift — and "/pocket/hello did not answer" is
+  // exactly the conclusion the probe exists to hand the user. The probe publishes
+  // the URL it resolved, which is what this asserts on.
+  const plain = makeDom({ safeTop: 0 }).run()
+  assert.equal(plain.hostUrl, 'http://192.168.1.210:3080/pocket/hello',
+    'a plain page resolves against its own document base')
+
+  const prefixed = makeDom({ safeTop: 0, baseURI: 'http://nas.local:3080/dsh/' }).run()
+  assert.equal(prefixed.hostUrl, 'http://nas.local:3080/dsh/pocket/hello',
+    'a reverse-proxy mount point is part of the route')
+
+  // The desktop shell serves the page from `dsh-app://app/` and forwards every
+  // non-static path on that origin to the Host with its cookie, so that base must
+  // win over the published transport — which is the Host's own origin, usable for
+  // the platform's WebSocket mux and not for a cross-origin HTTP request.
+  const shell = makeDom({
+    safeTop: 0,
+    baseURI: 'dsh-app://app/',
+    transport: { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' },
+  }).run()
+  assert.equal(shell.hostUrl, 'dsh-app://app/pocket/hello',
+    'the forwarded document base must win over the transport')
+
+  // Only a page with no base of its own falls back to the transport.
+  const baseless = makeDom({
+    safeTop: 0,
+    baseURI: '',
+    transport: { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' },
+  }).run()
+  assert.equal(baseless.hostUrl, 'http://127.0.0.1:55531/pocket/hello',
+    'with no document base the transport is the only remaining base')
+
+  // Scoped to the function, not the file: a doc comment naming the transport must
+  // not be able to satisfy or break an assertion about resolution order.
+  const fnStart = source.indexOf('var hostUrl = function')
+  assert.ok(fnStart !== -1, 'the probe must define its own hostUrl')
+  const fnBody = source.slice(fnStart, source.indexOf('};', fnStart) + 2)
+  assert.ok(fnBody.indexOf('document.baseURI') < fnBody.indexOf('__DSH_TRANSPORT__'),
+    'the source must try the document base before the transport')
 })
 
 console.log('\nprobe smoke: ' + passed + ' checks passed')

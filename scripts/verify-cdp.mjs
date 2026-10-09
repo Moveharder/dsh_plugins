@@ -138,12 +138,28 @@ async function clickElement(cdp, session, selector, fx = 0.5, fy = 0.5) {
 
   // Hit-test first: "rendered" is not "clickable". An element can be present
   // with perfectly normal computed style and still be covered by a sibling.
+  // Name the cover in the failure: "covered by something" sends the reader
+  // hunting, and the answer is always one elementFromPoint away.
   const hit = await evaluate(cdp, session, `(() => {
     const el = document.elementFromPoint(${box.x}, ${box.y})
     const target = document.querySelector(${JSON.stringify(selector)})
-    return !!(el && target && (el === target || target.contains(el)))
+    const describe = (n) => {
+      if (!n) return null
+      const id = n.id ? '#' + n.id : ''
+      const cls = (typeof n.className === 'string' && n.className) ? '.' + n.className.trim().split(/\\s+/).join('.') : ''
+      return n.tagName.toLowerCase() + id + cls
+    }
+    return {
+      ok: !!(el && target && (el === target || target.contains(el))),
+      cover: describe(el),
+      target: describe(target),
+      point: { x: ${box.x}, y: ${box.y} },
+    }
   })()`)
-  if (!hit) throw new Error(selector + ' is not hit-testable at its centre (covered by something)')
+  if (!hit.ok) {
+    throw new Error(selector + ' is not hit-testable at ' + Math.round(hit.point.x) + ',' +
+      Math.round(hit.point.y) + ' — covered by ' + hit.cover + ' (target ' + hit.target + ')')
+  }
 
   for (const type of ['mousePressed', 'mouseReleased']) {
     await cdp.send('Input.dispatchMouseEvent', {
@@ -186,6 +202,33 @@ function record(ok, label, detail) {
 function expect(ok, label, detail) { record(!!ok, label, detail) }
 function expectEqual(actual, expected, label) {
   record(actual === expected, label, 'expected ' + JSON.stringify(expected) + ', got ' + JSON.stringify(actual))
+}
+
+/**
+ * Assert that a settings row's text proves it reached the host half.
+ *
+ * Two things are checked, and they are deliberately different in kind:
+ *
+ *   - the row must not say the host half is unreachable. "host 半区无响应" (v0.1.5)
+ *     and "host 半区未就绪" (v0.1.4) both mean the row asked and got nothing. The
+ *     host half being alive while the row claims otherwise IS the reported bug, so
+ *     this fails.
+ *   - it must name *a* version, but not necessarily the checkout's. A `link:`
+ *     install serves the client half from disk the instant it changes while the
+ *     host half keeps whatever the process loaded at startup, so the two disagree
+ *     until `dsh web` restarts. That is a property of the install, not a plugin
+ *     defect, and failing on it would report a stale process as a code bug.
+ */
+function expectHostReachable(text, label) {
+  const said = JSON.stringify(String(text))
+  record(!/无响应|未就绪/.test(text), label + ' reaches the host half', 'row said: ' + said)
+  const running = (String(text).match(/v\d+\.\d+\.\d+[^\s·]*/) || [null])[0]
+  record(!!running, label + ' names the running host half version', 'row said: ' + said)
+  if (running && running !== 'v' + PKG_VERSION) {
+    console.log('  ..  host half is running ' + running + ' while the checkout is v' + PKG_VERSION +
+      ' — restart `dsh web` to load the host half')
+  }
+  return running
 }
 
 // ---------------------------------------------------------------------------
@@ -261,20 +304,85 @@ async function loadPage(cdp, session, { mobile }) {
   // "did our plugin activate without breaking boot".
   await waitFor(cdp, session, `!!document.querySelector('[data-shell-overlay]')`, 'AppFrame to render', 40000)
 
-  // A brand-new browser profile gets the host's Internal Testing Notice. It is
-  // an aria-modal overlay that would swallow every click, so clear the whole
-  // root rather than just the dialog (removing only the dialog leaves the mask).
-  const dismissed = await evaluate(cdp, session, `(() => {
-    const dialog = document.querySelector('[aria-modal="true"]')
-    if (!dialog) return false
-    let root = dialog
-    while (root.parentElement && root.parentElement !== document.body) root = root.parentElement
-    root.remove()
-    return true
-  })()`)
-  if (dismissed) console.log('  ..  dismissed a host modal (fresh profile notice)')
+  await clearHostOverlay(cdp, session)
 
   await sleep(1200)
+}
+
+/**
+ * Get past the host's first-run notice, and undo the lock it puts on the page.
+ *
+ * Two separate mistakes here cost a long detour each, so both are handled:
+ *
+ *   1. Removing the dialog is not enough. While it is open the host locks the
+ *      page with `inert` on #root (plus a scroll lock). Drop the dialog without
+ *      undoing that and every later hit-test silently resolves to <body> — which
+ *      looks exactly like a plugin button covered by something, and is precisely
+ *      how a healthy plugin gets reported as broken.
+ *   2. The dialog is not always `[aria-modal="true"]`, and it is not always up by
+ *      the time the shell frame is. More than one flavour of first-run overlay
+ *      exists (one instance showed only `div._mask_…`), and waiting for
+ *      `[data-shell-overlay]` only proves the app booted — not that the notice has
+ *      mounted. So poll, and find the overlay by aria-modal *or* by shape.
+ *
+ * Never remove #root: the app lives there and the overlay is a portalled sibling.
+ */
+async function clearHostOverlay(cdp, session, timeoutMs = 8000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const state = await evaluate(cdp, session, `(() => {
+      const appRoot = document.getElementById('root')
+      const isFullBleed = (el) => {
+        const cs = getComputedStyle(el)
+        if (cs.position !== 'fixed' || cs.pointerEvents === 'none') return false
+        const r = el.getBoundingClientRect()
+        return r.width >= innerWidth * 0.9 && r.height >= innerHeight * 0.9
+      }
+      let overlay = document.querySelector('[aria-modal="true"]')
+      let how = overlay ? 'aria-modal' : null
+      if (!overlay) {
+        overlay = [...document.querySelectorAll('body div')].find(isFullBleed) || null
+        if (overlay) how = 'full-bleed mask'
+      }
+
+      let removed = null
+      if (overlay) {
+        let top = overlay
+        // Stop before #root/body: walking past #root would delete the app itself.
+        while (top.parentElement && top.parentElement !== document.body && top.parentElement !== appRoot) {
+          top = top.parentElement
+        }
+        if (top !== appRoot) {
+          removed = top.id || (typeof top.className === 'string' && top.className) || top.tagName.toLowerCase()
+          top.remove()
+        }
+      }
+
+      // Always undo the lock, whether or not a dialog was up.
+      const unlocked = []
+      for (const el of [document.body, ...(appRoot ? [appRoot] : []),
+                        ...document.body.querySelectorAll('[inert], [aria-hidden="true"]')]) {
+        if (!el) continue
+        if (el.hasAttribute('inert')) { el.removeAttribute('inert'); unlocked.push(el.id || el.tagName.toLowerCase()) }
+        if (el.getAttribute('aria-hidden') === 'true') el.removeAttribute('aria-hidden')
+      }
+      for (const el of [document.documentElement, document.body]) {
+        if (el.style.overflow) el.style.overflow = ''
+        if (el.style.pointerEvents) el.style.pointerEvents = ''
+      }
+      return { how, removed, unlocked }
+    })()`)
+
+    if (state && (state.removed || state.unlocked.length)) {
+      console.log('  ..  cleared a host overlay' +
+        (state.how ? ' (' + state.how + ')' : '') +
+        (state.removed ? ', removed ' + state.removed : '') +
+        (state.unlocked.length ? ', unlocked ' + state.unlocked.join(', ') : ''))
+      return state
+    }
+    if (Date.now() > deadline) return state
+    await sleep(300)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +391,11 @@ async function loadPage(cdp, session, { mobile }) {
 
 async function runMobile(cdp, session) {
   console.log('\n[mobile 390x844, pointer:coarse]')
+
+  // Cheap second look: the notice can mount just after the shell frame, and a
+  // leftover lock would make every hit-test below lie. Short timeout because by
+  // now it has either appeared or it is not coming.
+  await clearHostOverlay(cdp, session, 2500)
 
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket')`), 'on',
     'gate is on')
@@ -366,13 +479,61 @@ async function runMobile(cdp, session) {
   expect(parseFloat(fab.strokeWidth) <= 1.3, 'glyph stroke is thin, not a block',
     'strokeWidth=' + fab.strokeWidth)
   // A 28px control is below the 44px touch-target guideline, so it must at least
-  // be genuinely hittable at its centre — checked by the click below.
-  expect(await evaluate(cdp, session, `(() => {
+  // be genuinely hittable at its centre — checked by the click below. Report the
+  // geometry and the stack when it is not: "covered by something" is the least
+  // actionable message a hit-test can produce.
+  const fabHit = await evaluate(cdp, session, `(() => {
     const el = document.querySelector('.pocket-fab')
+    if (!el) return { ok: false, why: 'no .pocket-fab element' }
     const r = el.getBoundingClientRect()
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
-    return !!(hit && el.contains(hit))
-  })()`), 'toggle is hit-testable at its centre')
+    const x = r.left + r.width / 2, y = r.top + r.height / 2
+    const hit = document.elementFromPoint(x, y)
+    const describe = (n) => !n ? null : (n.tagName.toLowerCase()
+      + (n.id ? '#' + n.id : '')
+      + (typeof n.className === 'string' && n.className ? '.' + n.className.trim().split(/\\s+/).join('.') : ''))
+    const cs = getComputedStyle(el)
+    return {
+      ok: !!(hit && el.contains(hit)),
+      rect: { x: r.left, y: r.top, w: r.width, h: r.height },
+      centre: { x, y },
+      viewport: { w: innerWidth, h: innerHeight },
+      onTop: describe(hit),
+      stack: (document.elementsFromPoint(x, y) || []).slice(0, 4).map(describe),
+      self: { position: cs.position, pointerEvents: cs.pointerEvents, visibility: cs.visibility,
+              opacity: cs.opacity, zIndex: cs.zIndex, bottom: cs.bottom, transform: cs.transform },
+      // An ancestor with pointer-events:none makes the button unhittable while
+      // every one of its own computed values still looks correct. A clipping
+      // ancestor does the same by geometry. Report both, with boxes.
+      ancestorPointerEvents: (() => {
+        const out = []
+        for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+          const s = getComputedStyle(n)
+          const r = n.getBoundingClientRect()
+          out.push(describe(n) + ' pe=' + s.pointerEvents + ' ov=' + s.overflow
+            + ' clip=' + s.clipPath + ' tr=' + (s.transform === 'none' ? '-' : 'yes')
+            + ' box=' + [r.left, r.top, r.width, r.height].map(Math.round).join(','))
+        }
+        return out
+      })(),
+      // An inert or aria-hidden ancestor removes a subtree from hit testing *and*
+      // from elementsFromPoint — which is why the answer here can be "nothing at
+      // all" at a point where a laid-out button provably sits. The harness
+      // dismisses the host's first-run notice by clearing #root, so this is how a
+      // leftover modal state gets spotted rather than blamed on the plugin.
+      inertChain: (() => {
+        const out = []
+        for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+          const attrs = []
+          if (n.hasAttribute('inert')) attrs.push('inert')
+          if (n.getAttribute('aria-hidden') === 'true') attrs.push('aria-hidden')
+          if (n.hasAttribute('aria-modal')) attrs.push('aria-modal')
+          if (attrs.length) out.push(describe(n) + ' [' + attrs.join(' ') + ']')
+        }
+        return out
+      })(),
+    }
+  })()`)
+  expect(fabHit.ok, 'toggle is hit-testable at its centre', JSON.stringify(fabHit))
 
   // The conversation header used to reserve 52px on the left to clear the toggle
   // while it sat in the top-left corner. Now that the toggle is at the bottom,
@@ -626,10 +787,10 @@ async function runMobile(cdp, session) {
         record(false, 'status row contributed to settings.general.item', 'not found')
       } else {
         expect(/Pocket UI/.test(row.text), 'status row rendered in General settings', row.text)
-        // Read the expected version from package.json: a hardcoded literal turns
-        // every release into a false failure.
-        expect(row.text.includes('v' + PKG_VERSION),
-          'status row shows the host half version', 'expected v' + PKG_VERSION + ' in: ' + row.text)
+        // The expected version comes from package.json rather than a literal, so a
+        // release never turns into a false failure — and a host half that lags the
+        // checkout is reported as a stale process instead of a code defect.
+        expectHostReachable(row.text, 'status row')
         expect(row.w <= row.vw, 'status row fits the sheet width', JSON.stringify(row))
 
         if (SCREENSHOT_DIR) {
@@ -659,6 +820,7 @@ async function runDesktop(cdp, session, { label, width, height }) {
   await cdp.send('Page.navigate', { url: URL_UNDER_TEST }, session)
   await waitFor(cdp, session, `!!document.querySelector('[data-shell-overlay]')`, 'AppFrame to render', 40000)
   await sleep(1200)
+  await clearHostOverlay(cdp, session, 2500)
 
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket')`), null,
     'gate is off')
@@ -717,6 +879,11 @@ async function runDesktop(cdp, session, { label, width, height }) {
       found: !!mine,
       mine: mine ? measure(mine) : null,
       neighbour: hosts.length > 0 ? measure(hosts[hosts.length - 1]) : null,
+      // The row's *text* is the user-visible contract: it is the only place the
+      // plugin reports whether it could reach its host half.
+      rowTitle: mine ? (mine.querySelector('.pocket-row-title') || {}).textContent : null,
+      rowHint: mine ? (mine.querySelector('.pocket-row-hint') || {}).textContent : null,
+      rowButtons: mine ? [...mine.querySelectorAll('button')].map((b) => b.textContent) : [],
     }
   })()`)
 
@@ -736,6 +903,18 @@ async function runDesktop(cdp, session, { label, width, height }) {
       'settings row hint uses the host secondary size on desktop', JSON.stringify(rows.mine.hint))
     expect(rows.mine.title && rows.mine.title.lineHeight === '22px',
       'settings row title uses the host line height on desktop', JSON.stringify(rows.mine.title))
+
+    // ---- the reported bug, end to end -------------------------------------
+    // A row that claims the host half is unreachable while the host half is
+    // answering is a routing bug in the plugin, not a dead host — which is exactly
+    // why it is asserted against a real browser rather than trusted to unit tests.
+    const hint = rows.rowHint || ''
+    expect(!hint.includes('正在连接 host 半区'),
+      'the settings row is not still waiting on the host half',
+      'row said: ' + JSON.stringify(hint))
+    expectHostReachable(hint, 'the settings row')
+    expect(rows.rowButtons.includes('检测更新'),
+      'the update check stays offered', 'buttons: ' + JSON.stringify(rows.rowButtons))
   }
 
   if (SCREENSHOT_DIR && label === 'desktop') {
@@ -769,13 +948,27 @@ try {
   const { cdp, sessionId } = await openSession(launched.port)
 
   try {
-    await loadPage(cdp, sessionId, { mobile: true })
-    await runMobile(cdp, sessionId)
-
-    // A narrow *desktop* window is the classic false positive: split-screen and
-    // OS display scaling both push a desktop viewport under 1024px.
-    await runDesktop(cdp, sessionId, { label: 'narrow desktop', width: 900, height: 800 })
-    await runDesktop(cdp, sessionId, { label: 'desktop', width: 1280, height: 800 })
+    // Each phase is isolated: an assertion failure inside one must not hide the
+    // phases after it. A verifier that stops at the first problem reports one
+    // symptom per run, which is the slowest possible way to learn the state of
+    // the plugin.
+    const phases = [
+      ['mobile', async () => {
+        await loadPage(cdp, sessionId, { mobile: true })
+        await runMobile(cdp, sessionId)
+      }],
+      // A narrow *desktop* window is the classic false positive: split-screen and
+      // OS display scaling both push a desktop viewport under 1024px.
+      ['narrow desktop', () => runDesktop(cdp, sessionId, { label: 'narrow desktop', width: 900, height: 800 })],
+      ['desktop', () => runDesktop(cdp, sessionId, { label: 'desktop', width: 1280, height: 800 })],
+    ]
+    for (const [label, run] of phases) {
+      try {
+        await run()
+      } catch (err) {
+        record(false, label + ' phase completed', String((err && err.message) || err))
+      }
+    }
   } finally {
     cdp.close()
   }

@@ -451,6 +451,104 @@ check('a throwing subscriber cannot break the others', () => {
 })
 
 // --------------------------------------------------------------------------
+// 4b. host-route resolution
+// --------------------------------------------------------------------------
+//
+// The settings row is the user's only window into the host half, and it talks to
+// it over HTTP. Those paths must be resolved document-relative, never
+// root-absolute: a root-absolute path ignores a reverse-proxy mount point and,
+// in the desktop shell, resolves under the `dsh-app://app/` scheme.
+//
+// That second case is where the priority matters, and it is the opposite of the
+// platform's own `remoteStreamUrl()` order. The shell's `protocol.handle`
+// intercepts only its static assets on that origin and forwards *everything
+// else* to the Host through `forwardWebRequest`, which keeps the pathname and
+// attaches the Host cookie — so `dsh-app://app/pocket/meta` DOES reach the
+// plugin. `streamBaseUrl` instead names the Host's own origin, which the platform
+// uses for its WebSocket mux (`url.protocol = 'wss:'`, not policed by CORS, and
+// the shell has a dedicated `ws://127.0.0.1/*` cookie rule for it). Aiming a
+// cross-origin `fetch()` there fails: no cookie, no `access-control-allow-origin`.
+
+check('host routes resolve against the document base, then the transport, then the mount', () => {
+  const { hostUrl } = mod.__internal
+  assert.equal(typeof hostUrl, 'function', 'hostUrl must be exported for this test')
+
+  const prevDocument = globalThis.document
+  const prevTransport = globalThis.__DSH_TRANSPORT__
+  try {
+    globalThis.document = { baseURI: 'http://127.0.0.1:3080/' }
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'http://127.0.0.1:3080/pocket/meta',
+      'a plain served page resolves against its own document base')
+
+    // The load-bearing case. `dsh-app://app/` is the base the shell routes to the
+    // Host, so it must win even though a transport is published; the transport's
+    // cross-origin origin would be refused for want of CORS headers.
+    globalThis.document = { baseURI: 'dsh-app://app/' }
+    globalThis.__DSH_TRANSPORT__ = { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' }
+    assert.equal(hostUrl('/pocket/meta'), 'dsh-app://app/pocket/meta',
+      'the document base must win: the shell forwards that origin to the Host with its cookie')
+
+    // A mount point must survive: the route is document-relative, not root-absolute.
+    globalThis.document = { baseURI: 'http://nas.local:3080/dsh/' }
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta',
+      'a reverse-proxy prefix is part of the route')
+
+    // No usable document base: only then is the published transport worth trying.
+    globalThis.document = {}
+    globalThis.__DSH_TRANSPORT__ = { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' }
+    assert.equal(hostUrl('/pocket/meta'), 'http://127.0.0.1:55531/pocket/meta',
+      'the transport is the fallback for a page with no base of its own')
+
+    // No base at all (a hostile/partial stub) must degrade to a relative URL
+    // rather than inventing a root-absolute one.
+    globalThis.document = {}
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'pocket/meta')
+
+    // A leading slash on the *input* must not smuggle root-absoluteness back in.
+    globalThis.document = { baseURI: 'http://nas.local:3080/dsh/' }
+    assert.equal(hostUrl('pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta')
+    assert.equal(hostUrl('///pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta')
+  } finally {
+    globalThis.document = prevDocument
+    if (prevTransport === undefined) delete globalThis.__DSH_TRANSPORT__
+    else globalThis.__DSH_TRANSPORT__ = prevTransport
+  }
+})
+
+check('no host request is hard-coded to a root-absolute path', () => {
+  // Structural, because this is a mistake that is invisible in review and only
+  // shows up as "the plugin is installed but the host never answers".
+  const calls = source.match(/\bfetch\(/g) || []
+  assert.equal(calls.length, 4, 'expected the four known call sites, got ' + calls.length)
+  assert.ok(!/fetch\(\s*['"]\//.test(source),
+    'a root-absolute literal bypasses hostUrl() and breaks a path-prefixed deployment')
+  // The transport is the fallback inside hostUrl(), never a base a call site
+  // reaches for directly — that is the cross-origin request that fails.
+  assert.ok(!/fetch\([^)]*__DSH_TRANSPORT__/.test(source),
+    'no call site may fetch against the transport base directly')
+})
+
+check('the unreachable-host row names the remedy, not just the symptom', () => {
+  // "host 半区无响应" on its own sends the user hunting for a broken plugin when the
+  // real state is usually "the host half has not been loaded yet". It cannot be
+  // loaded without restarting the server, because the module is already imported
+  // into the Node process and has no unload path (see README, 开发循环). So the row
+  // has to say that — otherwise the only evidence the user has is a dead-looking
+  // update button, which is what made this hard to diagnose in the first place.
+  const body = source.slice(source.indexOf('function PocketSettingsRow'))
+  assert.match(body, /if \(link === 'down'\) hint\.push\('[^']*dsh web[^']*'\)/,
+    'a down row must name the restart remedy')
+  // And it must be conditional: a healthy row may not carry restart advice.
+  const hintBlock = body.slice(body.indexOf('const hint = ['),
+    body.indexOf('return React.createElement'))
+  assert.ok(!/重启/.test(hintBlock.replace(/if \(link === 'down'\)[^\n]*\n/, '')),
+    'restart advice must not appear on a connected row')
+})
+
+// --------------------------------------------------------------------------
 
 
 // --------------------------------------------------------------------------

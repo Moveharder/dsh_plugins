@@ -347,6 +347,52 @@ try {
     assert.equal(res.body.upgrade.ok, 'local')
   })
 
+  await check('a link install living OUTSIDE the profile is still recognised', async () => {
+    // The fixture above copies the plugin *inside* `node_modules`, so the walk up
+    // from `import.meta.url` reaches the profile and the guard looks healthy.
+    // A real `link:` install does not: Node resolves this module to the source
+    // checkout, the walk starts outside the profile, finds nothing and returns
+    // null — which silently turned `localInstall` into null and removed the guard
+    // that refuses to overwrite a checkout with a published copy.
+    const home = await tmpdir('pocket-home-')
+    const checkout = await tmpdir('pocket-checkout-')
+    await fsp.cp(path.join(pkgRoot, 'lib'), path.join(checkout, 'lib'), { recursive: true })
+    await fsp.copyFile(path.join(pkgRoot, 'package.json'), path.join(checkout, 'package.json'))
+
+    const profile = path.join(home, 'profiles', 'web')
+    await fsp.mkdir(path.join(profile, 'node_modules'), { recursive: true })
+    await fsp.writeFile(path.join(profile, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-web',
+      private: true,
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', PKG] } },
+      dependencies: { [PKG]: 'link:' + checkout },
+    }, null, 2))
+    await fsp.symlink(checkout, path.join(profile, 'node_modules', PKG), 'dir')
+
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      const m = await loadHostHalf(path.join(checkout, 'lib', 'index.js'))
+      const c = makeCtx()
+      m.apply(c)
+      await new Promise((r) => setTimeout(r, 150))
+
+      const meta = await callRoute(c.routes[0], '/pocket/meta')
+      assert.equal(path.basename(String(meta.body.profileRoot)), 'web',
+        'the profile that owns the link must be found, got: ' + meta.body.profileRoot)
+      assert.match(String(meta.body.localInstall), /^link:/,
+        'and it must be reported as a local install')
+
+      const res = await callRoute(c.routes[0], '/pocket/upgrade', 'POST')
+      assert.equal(res.body.upgrade.ok, 'local',
+        'the local-install guard must hold for a checkout outside the profile')
+      unload(c)
+    } finally {
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+    }
+  })
+
   // -- registry install upgrades -------------------------------------------
   await check('a registry install upgrades via the injected package manager', async () => {
     const pm = await makeFakePkgManager()

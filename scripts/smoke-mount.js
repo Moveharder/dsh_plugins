@@ -95,7 +95,7 @@ function findAllDeep(root, selector) {
  * a CSS engine — a stub that only has to answer the three questions the plugin
  * asks is a stub that cannot quietly disagree with it about selector syntax.
  */
-function makeDom({ frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser' } = {}) {
+function makeDom({ frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser', baseURI = 'http://127.0.0.1:3080/' } = {}) {
   const html = makeNode('html')
   const head = makeNode('head')
   const body = makeNode('body')
@@ -173,6 +173,12 @@ function makeDom({ frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser
     documentElement: html,
     head,
     body,
+    /**
+     * The host routes are resolved document-relative, so a stub without a base
+     * URI is not a faithful browser: it makes every `/pocket/*` URL relative and
+     * hides exactly the resolution bug these tests exist to catch.
+     */
+    baseURI: baseURI,
     createElement: (tag) => makeNode(tag),
     querySelector: (sel) => {
       if (sel === 'meta[name="viewport"]') return viewportMeta
@@ -211,8 +217,8 @@ function makeDom({ frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser
 }
 
 /** Mount the bundle's client half against a stub DOM. */
-function mount({ media = true, search = '', frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser' } = {}) {
-  const dom = makeDom({ frameTop, frameHeight, insets, mode })
+function mount({ media = true, search = '', frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser', transport = null, baseURI = 'http://127.0.0.1:3080/' } = {}) {
+  const dom = makeDom({ frameTop, frameHeight, insets, mode, baseURI })
   dom.window.location.search = search
   const pluginQuery = dom.window.matchMedia
   dom.window.matchMedia = (q) => (q === '(max-width: 1023px) and (pointer: coarse)'
@@ -226,8 +232,30 @@ function mount({ media = true, search = '', frameTop = 0, frameHeight = 800, ins
 
   const prevDocument = globalThis.document
   const prevObserver = globalThis.MutationObserver
+  const prevFetch = globalThis.fetch
+  const prevTransport = globalThis.__DSH_TRANSPORT__
   globalThis.document = dom.document
   globalThis.MutationObserver = class { observe() {} disconnect() {} takeRecords() { return [] } }
+  // In a browser `window` IS the global object, so the shell's transport global
+  // must be published on globalThis — a stub that only set `window.…` would make
+  // this suite pass while the real desktop shell stayed broken.
+  if (transport) globalThis.__DSH_TRANSPORT__ = transport
+  else delete globalThis.__DSH_TRANSPORT__
+  /** Every URL the client half asked the host for — the subject under test here. */
+  const fetched = []
+  globalThis.fetch = (url, init) => {
+    const href = String(url)
+    fetched.push({ url: href, method: (init && init.method) || 'GET' })
+    // Never real: the suite must stay offline, and a stub that reached a live
+    // server would make the result depend on what happens to be running.
+    if (href.endsWith('/pocket/probe.js')) {
+      return Promise.resolve({ ok: true, text: async () => '/* stub probe */' })
+    }
+    if (href.endsWith('/pocket/hello')) {
+      return Promise.resolve({ ok: true, json: async () => ({ ok: true, version: '0.0.0-stub' }) })
+    }
+    return Promise.resolve({ ok: false, status: 404, json: async () => ({}) })
+  }
 
   const errors = []
   const disposers = []
@@ -263,7 +291,7 @@ function mount({ media = true, search = '', frameTop = 0, frameHeight = 800, ins
     }
     mod.apply(ctx)
     return {
-      dom, mod, ctx, disposers, slots, errors,
+      dom, mod, ctx, disposers, slots, errors, fetched,
       /**
        * Run teardown with the stub DOM still bound. The effects capture `document`
        * from the global scope exactly as they do in a browser, so restoring the
@@ -282,6 +310,9 @@ function mount({ media = true, search = '', frameTop = 0, frameHeight = 800, ins
   } finally {
     globalThis.document = prevDocument
     globalThis.MutationObserver = prevObserver
+    globalThis.fetch = prevFetch
+    if (prevTransport === undefined) delete globalThis.__DSH_TRANSPORT__
+    else globalThis.__DSH_TRANSPORT__ = prevTransport
   }
 }
 
@@ -391,5 +422,110 @@ check('the inset probe element never survives a pass', () => {
   const { dom } = mount({ media: true, insets: { top: 44 } })
   assert.equal(dom.html.children.filter((c) => c.hasAttribute('data-pocket-inset-probe')).length, 0)
 })
+
+// ---------------------------------------------------------------------------
+// host-route resolution — the "host 半区无响应" bug, mounted
+// ---------------------------------------------------------------------------
+//
+// The status row is the only way a user can tell a broken install from a broken
+// host, and it asks the host over HTTP. Those requests used to be root-absolute
+// (`fetch('/pocket/meta')`), which silently assumes the host is reachable at the
+// document's own origin *root*. That assumption fails behind a reverse-proxy
+// mount point — and in the desktop shell it must instead be resolved against the
+// `dsh-app://app/` base, which the shell forwards to the Host. Either way the row
+// claimed "host 半区无响应" while the host half was answering curl fine.
+
+check('host requests resolve against the document base, never the root path', () => {
+  const { fetched } = mount({ search: '?pocket=probe', media: true })
+  assert.ok(fetched.length >= 2,
+    'probe mode asks the host for /pocket/hello and /pocket/probe.js, got: ' + JSON.stringify(fetched))
+  for (const req of fetched) {
+    assert.ok(req.url.startsWith('http://127.0.0.1:3080/pocket/'),
+      'a root-absolute path resolves to a URL the host may not serve: ' + req.url)
+  }
+})
+
+check('the desktop shell routes to its own forwarded origin, not the published transport', () => {
+  // dsh 0.2.0's desktop shell renders the app from `dsh-app://app/`, intercepts
+  // only its static assets on that origin, and forwards every *other* path there
+  // to the Host via `forwardWebRequest` — which keeps the pathname and attaches
+  // the Host cookie. So `dsh-app://app/pocket/…` is exactly the URL that reaches
+  // the plugin, and the document base must win.
+  //
+  // Reaching for `__DSH_TRANSPORT__.streamBaseUrl` instead is what looks
+  // tempting and is wrong: that is the Host's *own* origin, published for the
+  // platform's WebSocket mux (not policed by CORS, and the shell has a dedicated
+  // `ws://127.0.0.1/*` cookie rule). A cross-origin `fetch()` there gets no
+  // cookie and no `access-control-allow-origin`, i.e. "Failed to fetch".
+  const { fetched } = mount({
+    search: '?pocket=probe', media: true,
+    baseURI: 'dsh-app://app/',
+    transport: { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' },
+  })
+  assert.ok(fetched.length >= 2, 'the probe still asks the host, got: ' + JSON.stringify(fetched))
+  for (const req of fetched) {
+    assert.ok(req.url.startsWith('dsh-app://app/pocket/'),
+      'the forwarded document base must win over the transport: ' + req.url)
+  }
+})
+
+check('a page with no base of its own falls back to the published transport', () => {
+  // The fallback still has to exist — it is the only lead a base-less page has —
+  // it simply must not outrank a usable document base.
+  const { fetched } = mount({
+    search: '?pocket=probe', media: true,
+    baseURI: '',
+    transport: { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' },
+  })
+  assert.ok(fetched.length >= 2, 'the probe still asks the host, got: ' + JSON.stringify(fetched))
+  for (const req of fetched) {
+    assert.ok(req.url.startsWith('http://127.0.0.1:55531/pocket/'),
+      'with no document base the transport is the only remaining base: ' + req.url)
+  }
+})
+
+check('a path-prefixed deployment keeps the routes under its mount point', () => {
+  // Behind a reverse proxy the app can be served at /dsh/; the routes belong to
+  // that mount, not to the proxy root.
+  const { fetched } = mount({
+    search: '?pocket=probe', media: true,
+    baseURI: 'http://nas.local:3080/dsh/',
+  })
+  assert.ok(fetched.length >= 2, 'the probe still asks the host, got: ' + JSON.stringify(fetched))
+  for (const req of fetched) {
+    assert.ok(req.url.startsWith('http://nas.local:3080/dsh/pocket/'),
+      'the mount point must be preserved: ' + req.url)
+  }
+})
+
+check('the failure path names the URL it failed against', () => {
+  // "No response" and "no answer from *that* URL" are different problems, and the
+  // second one is diagnosable from a screenshot of the row.
+  const body = source.slice(source.indexOf('function PocketSettingsRow'))
+  assert.match(body, /setFailure\('无法连接 ' \+ url/, 'the settings row must report the URL it could not reach')
+  const resolver = extractPocketFunction(source, 'hostUrl')
+  assert.match(resolver, /__DSH_TRANSPORT__/, 'every host request must go through the resolver')
+  assert.ok(resolver.indexOf('document.baseURI') < resolver.indexOf('__DSH_TRANSPORT__'),
+    'the document base must be tried before the transport, or the desktop shell breaks')
+  const fetches = source.match(/fetch\(/g) || []
+  assert.equal(fetches.length, 4, 'every fetch call site is accounted for')
+  assert.ok(!/fetch\('\/pocket/.test(source),
+    'no call site may hard-code a root-absolute host route')
+})
+
+/** Extract one function by brace matching (mirrors the client smoke test). */
+function extractPocketFunction(text, name) {
+  const start = text.indexOf('function ' + name + '(')
+  assert.ok(start !== -1, 'function ' + name + ' must exist')
+  let depth = 0
+  for (let i = text.indexOf('{', start); i >= 0 && i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1
+    else if (text[i] === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  throw new Error('unbalanced braces in ' + name)
+}
 
 console.log('\nmount smoke: ' + passed + ' checks passed')

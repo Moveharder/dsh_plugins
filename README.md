@@ -75,11 +75,35 @@ App 内置 WebView 没有控制台，所以诊断信息必须能自己长在屏�
 http://<你的 NAS>:3080/?pocket=probe      # 打开探测覆盖层
 ```
 
-覆盖层给出：门控为什么开/关、`--pocket-safe-t` 与 `env(safe-area-inset-top)` 的实测值、顶部空白的像素高度与**归属元素**、每个宿主地标盒子的 padding/margin、`/pocket/hello` 返回了什么。右上角有「复制全部 JSON」，直接粘给助手即可。
+覆盖层给出：门控为什么开/关、`--pocket-safe-t` 与 `env(safe-area-inset-top)` 的实测值、顶部空白的像素高度与**归属元素**、每个宿主地标盒子的 padding/margin、`/pocket/hello` 返回了什么，以及 **host 请求实际打到了哪个 URL**（`document.baseURI`、`document.origin`、`__DSH_TRANSPORT__` 是否存在、解析后的 `/pocket/hello`）。右上角有「复制全部 JSON」，直接粘给助手即可。
+
+最后那一组是"插件装上了但 host 半区连不上"的关键证据：`/pocket/hello` 不回答和**它被发到了哪个地址**是两个完全不同的问题，而后者往往一眼就能看出答案（例如地址里缺了反向代理的前缀，或者打到了一个根本没路由的 origin）。
 
 - 探针源码是 `lib/probe-src.js`（可 lint、可 diff、有独立单测），由 host 半区在 `/pocket/probe.js` 按需读取并提供——所以它不会进 bundle，也不影响正常页面加载。
+- 探针**自带一份** host 路由解析逻辑（它是独立文件，不能引用 bundle 里的那份），单测会断言两者口径一致——否则"探针说连不上"本身也会变得不可信。
 - `?pocket=probe` 会**强制开启**移动端布局：在手机上量到的必须是手机上真正在跑的那套布局。
 - `?pocket=off` 优先级更高，显式关闭时不会装探针。
+
+### 设置行写「host 半区无响应」怎么办
+
+先看**服务端日志**（`dsh web` 的 stdout）里有没有这一行：
+
+```
+[dsh-pocket-ui] host half active, version vX.Y.Z, routes under /pocket
+```
+
+- **没有这行** → host 半区压根没被加载。最常见的原因是**装完/更新完没有重启**：host 半区是被 `import` 进 Node 进程的，没有卸载路径，而 client 半区在 `link:` 安装下是直接读磁盘的，所以会出现"行出来了、host 还不在"的错位状态。重启即可。设置行在连不上时也会直接把这句话写在脸上。
+- **有这行** → host 半区活着，问题在**请求地址**。用 `?pocket=probe` 看它实际打到哪个 URL，对照：
+  - 反向代理挂在子路径（如 `/dsh/`）→ 路由必须相对 `document.baseURI` 解析，不能是根绝对路径；
+  - DSH 桌面壳：页面 origin 是 `dsh-app://app/`，协议处理器只截静态资源，**其余路径会连同宿主 cookie 一起转发给 Host**，所以解析基准就是 `document.baseURI`。
+- 另可显式指定 profile 目录（自动探测失败时用）：
+
+  ```sh
+  DSH_POCKET_PROFILE_ROOT=~/.dsh/profiles/web dsh web
+  ```
+
+  这只影响"这个安装是不是 `link:` 源码目录"的判定（免得在线升级覆盖掉你的工作副本），不影响路由。
+
 
 ## 安装
 
@@ -175,23 +199,24 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-npm run smoke                    # 四套全跑（77 项，全离线）
-node scripts/smoke-host.js       # 16 项：路由 + 探针脚本 + 在线升级全链路
-node scripts/smoke-client.js     # 36 项：bundle 契约、样式表不变量、安全区夹紧算术
-node scripts/smoke-mount.js      # 11 项：客户端半区真正挂到桩 DOM 上，含 teardown 不残留
-node scripts/smoke-probe.js      # 14 项：探针本身（含"读的是插件自己的判定"）
+npm run smoke                    # 四套全跑（87 项，全离线）
+node scripts/smoke-host.js       # 17 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位
+node scripts/smoke-client.js     # 39 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析
+node scripts/smoke-mount.js      # 16 项：客户端半区真正挂到桩 DOM 上，含 teardown 不残留、按页面 base 发请求
+node scripts/smoke-probe.js      # 15 项：探针本身（含"读的是插件自己的判定"、探针与 bundle 解析一致）
 node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screenshot ./shots
 ```
 
-三套无浏览器套件与 CDP 探针分工明确，这个划分是踩出来的：
+四套无浏览器套件与 CDP 探针分工明确，这个划分是踩出来的：
 
 - **smoke-\*（无浏览器）** 管*契约*：bundle 形状、样式表结构不变量、安全区夹紧的算术、teardown 是否归还宿主 DOM。
-  也正因如此，桩必须让"桩自己的 bug"能被看见——本仓库在这里连踩两次（`findFrame()` 拿不到 `[data-shell-overlay]`、`querySelectorAll` 不认识逗号列表），两次现象都长得像插件坏了，实际是桩不忠实。
-- **CDP 探针（53 项断言）** 管*真实 DOM*：计算后几何、层叠顺序、可点性——只有真浏览器能验证这些。
+  也正因如此，桩必须让"桩自己的 bug"能被看见——本仓库在这里连踩三次（`findFrame()` 拿不到 `[data-shell-overlay]`、`querySelectorAll` 不认识逗号列表、桩 `document` 没有 `baseURI`），三次现象都长得像插件坏了，实际是桩不忠实。
+- **CDP 探针（81 项断言）** 管*真实 DOM*：计算后几何、层叠顺序、可点性——只有真浏览器能验证这些。
+  每个阶段（移动端 / 窄桌面 / 桌面）独立捕获异常，一处失败不会掩盖后面的阶段。
 
 CDP 覆盖：
 
-- **移动端**（390×844 + 触摸模拟）：门控开启、样式注入、地标打标、viewport meta、网格塌缩、抽屉开合、遮罩可点、sheet 贴底全宽且**不被困在抽屉里**、**内容真的能滚动**、无幽灵滚动、状态行渲染
+- **移动端**（390×844 + 触摸模拟）：门控开启、样式注入、地标打标、viewport meta、网格塌缩、抽屉开合、遮罩可点、sheet 贴底全宽且**不被困在抽屉里**、**内容真的能滚动**、无幽灵滚动、状态行渲染**且能连上 host 半区**
 - **窄桌面**（900×800，鼠标）+ **桌面**（1280×800）：门控关闭、零地标残留、零注入控件、宿主网格未被改动、侧栏未被改成抽屉、**设置行度量与邻行一致**
 
 > headless Chrome **没有任何指针设备**，三个 `(pointer: …)` 查询全为 false。必须用
@@ -199,8 +224,40 @@ CDP 覆盖：
 > `Emulation.setEmulatedMedia` 对指针特征**静默无效**。
 >
 > 带 `?pocket=probe` 的页面会挂上探针覆盖层，断言几何的 CDP 用例不要带这个参数。
+>
+> 第一次跑会撞上宿主的 Internal Testing Notice。关掉它时**必须一并解除它对页面的锁**：
+> 宿主用 `#root[inert]` 锁住其余文档，只删弹窗不解除，之后每一次命中测试都只会返回
+> `<body>`——看起来就像"插件的按钮被什么东西盖住了"，实际是 `inert`。探针现在会打印
+> 命中的元素、元素栈、祖先链（`pe`/`overflow`/`clip`/`transform` + 盒子）与 `inert` 链，
+> 这类问题一次就能定位。
+>
+> 设置行的 `gap` 与邻行不一致（`8px` vs 宿主 `normal`）是**长期存在**的（v0.1.4 起相同），
+> 属视觉细节，未改；CDP 里仍会报出来。
 
 ## 更新记录
+
+### v0.1.6
+
+主题是**"插件装上了，但设置行说连不上 host 半区"**这一类问题——把结论从"猜"变成"看"。
+
+- **host 请求不再用根绝对路径**。`fetch('/pocket/meta')` 只在"应用正好挂在 origin 根"时才成立。两种正常部署里它不成立，而现象都是那句"host 半区无响应"：
+  - **反向代理挂在子路径**（`https://nas/dsh/`）：路由属于那个挂载点。
+  - **DSH 桌面壳**：页面 origin 是 `dsh-app://app/`。壳的 `protocol.handle` 只截静态资源（`/`、`/index.html`、`/assets/*`、`/favicon.svg`、`/manifest.webmanifest`），**其余路径一律经 `forwardWebRequest` 转发给 Host，并保留 pathname、附上宿主 cookie**——所以 `dsh-app://app/pocket/meta` 本来就能到达插件，正确的解析基准就是 `document.baseURI`。
+  现在统一按页面 base 解析（`document.baseURI` 优先）。**注意这与平台自己的 `remoteStreamUrl()` 顺序相反**，不要照抄：那一条加载的是 WebSocket mux（`ws:` 不受 CORS 约束，壳还专门为它重写了 cookie 与 origin），而把跨源 `fetch()` 打到 `streamBaseUrl` 会因为既没有 cookie、也没有 `access-control-allow-origin` 而直接 "Failed to fetch"。探针自带的同名解析函数与 bundle 口径一致，并有单测钉住。
+- **按钮失败不再沉默**。`检查更新` / `升级` 以前失败时 `catch` 里什么都不做——用户看到的就是"点了没反应"。现在行内直接写出**失败的那个 URL 和原因**。
+- **连不上时直接给解法**。host 半区是被 `import` 进 Node 进程的、没有卸载路径，所以**新装或更新后必须重启 `dsh web`**；而 `link:` 安装下 client 半区是直接读磁盘的，于是很容易出现"行出来了、host 还不在"的错位。行内现在会写「刚安装或更新过？重启 dsh web 后生效」。
+- **重试不再永久放弃**。原来的退避窗口耗尽后就永久停在"无响应"；手机上的页面可能开着好几天，期间 host 重启过也永远不会再连。现在快速窗口之后转为 15s 一次的心跳，自愈。
+- **host 半区现在能找到自己所在的 profile**。`link:` 安装时模块解析到的是源码目录，从 `import.meta.url` 往上走永远走不到 profile，`findProfileRoot()` 于是返回 `null`——"别把源码工作副本覆盖掉"的守卫因此形同虚设，状态行也说不出"本地安装"。现在多两条兜底：在 `$DSH_HOME/profiles/*` 里找 `node_modules/<name>` 真实指向本包的 profile；失败再退回唯一的 `dependencies` 匹配。另支持显式指定 `DSH_POCKET_PROFILE_ROOT=<dir>`。
+  > 实测：同一个 `link:` 安装，旧代码 `/pocket/meta` 返回 `"localInstall": null`，新代码返回 `"localInstall": "link:/…/dsh-pocket-ui"`。
+- **host 半区启动会打一行日志**（`[dsh-pocket-ui] host half active, version vX.Y.Z, routes under /pocket`）。原先走 `ctx.logger`，在 `dsh web` 的 stdout 里**根本看不到**，于是"host 半区到底加载了没有"无从判断——这正是最难区分的两种情况之一。
+- **状态行区分"正在连接"与"连不上"**，`已是最新` / `无法访问 npm registry` / `已关闭更新检查` / `本地安装 · 已是最新` 各自有独立文案，不再用一句"未检测更新"冒充结论。
+
+测试：
+
+- 四套无浏览器冒烟 77 → **87 项**（新增 host 路由解析、按页面 base 发请求、`link:` 安装的 profile 定位、探针与 bundle 解析一致）。
+- CDP 探针 53 → **81 项**，并把三个阶段**彼此隔离**：一处异常不再掩盖后面的阶段。
+- 顺手修掉 CDP harness 自身的一个坑：关掉宿主首次运行的 Internal Testing Notice 时没有解除它对页面的锁（`#root[inert]`），结果此后每一次命中测试都只返回 `<body>`，看起来就像"插件的按钮被盖住了"。探针现在会打印命中的元素、元素栈、祖先链几何与 `inert` 链。
+- 已知未改：设置行的 `gap` 与邻行不一致（`8px` vs 宿主 `normal`）。v0.1.4 起就是这样，属视觉细节，CDP 里仍会报出来。
 
 ### v0.1.5
 
