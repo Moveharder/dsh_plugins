@@ -1,6 +1,6 @@
 {
   "name": "dsh-pocket-ui",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH Web UI 移动端适配（轻量核心版）：窄屏下侧栏变抽屉、对话框变底部 sheet、刘海安全区避让、输入区不重叠；鼠标操作的桌面端任何宽度都完全 no-op。",
   "author": "spartaattack",
   "type": "module",
@@ -19,7 +19,8 @@
   },
   "dsh": {
     "client": {
-      "platform": "web"
+      "platform": "web",
+      "immediately": true
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -37,9 +38,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "smoke": "node scripts/smoke-host.js && node scripts/smoke-client.js",
+    "smoke": "node scripts/smoke-host.js && node scripts/smoke-client.js && node scripts/smoke-mount.js && node scripts/smoke-probe.js",
     "smoke:host": "node scripts/smoke-host.js",
-    "smoke:client": "node scripts/smoke-client.js"
+    "smoke:client": "node scripts/smoke-client.js",
+    "smoke:probe": "node scripts/smoke-probe.js",
+    "smoke:mount": "node scripts/smoke-mount.js"
   },
   "keywords": [
     "dsh",
