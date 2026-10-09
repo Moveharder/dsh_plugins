@@ -30,6 +30,11 @@ export type PocketUpgradeStatus =
   | 'ok'
   /** The install command failed. `message` carries the reason. */
   | 'fail'
+  /**
+   * The process is running older code than the package on disk, so the remedy is
+   * a restart rather than an install. Nothing was attempted.
+   */
+  | 'stale'
 
 /** In-flight / last upgrade attempt, as reported by `/pocket/meta`. */
 export interface PocketUpgradeState {
@@ -42,8 +47,16 @@ export interface PocketUpgradeState {
 /** `/pocket/meta` and `POST /pocket/check-update` response body. */
 export interface PocketMeta {
   name: string
-  /** Installed version, read from package.json. */
+  /** Version of the code loaded in the running process. */
   version: string
+  /**
+   * Version currently on disk. Differs from `version` after the package is
+   * replaced in place — the host half has no unload path, so it keeps running
+   * the code it imported until `dsh web` restarts.
+   */
+  installedVersion: string
+  /** `version !== installedVersion` — a `dsh web` restart is pending. */
+  stale: boolean
   /** Latest published version, or `null` if never looked up / lookup failed. */
   latest: string | null
   updateChecked: boolean

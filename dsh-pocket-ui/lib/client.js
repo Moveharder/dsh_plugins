@@ -970,8 +970,19 @@ html[data-pocket="on"] .pocket-backdrop {
                     .finally(() => setBusy(false))
             }
 
+            // The host half reports both the version it loaded at startup and the
+            // one currently on disk. They differ whenever the package was
+            // replaced under a running process — which is the normal case after
+            // an update here, because the client half is served from disk and
+            // hot-reloads while the host half sits in an imported module with no
+            // unload path. Left unnamed, the row just shows a version nobody can
+            // account for ("v0.1.4" on a v0.1.7 checkout) and offers an upgrade
+            // that cannot possibly help.
+            const stale = !!(meta && meta.stale)
+            const installedVersion = (meta && meta.installedVersion) || ''
+
             let version
-            if (meta && meta.version) version = 'v' + meta.version
+            if (meta && meta.version) version = 'v' + meta.version + (stale ? '（进程内）' : '')
             else if (link === 'pending') version = '正在连接 host 半区…'
             else version = 'host 半区无响应'
 
@@ -987,7 +998,12 @@ html[data-pocket="on"] .pocket-backdrop {
             // registry lookup has not answered, which is not a statement about
             // whether an update exists. The host half now reports why.
             let latestText
-            if (localInstall) {
+            if (stale) {
+                // Deliberately ahead of `localInstall` and `updateAvailable`:
+                // when the process is behind the disk, restarting is the entire
+                // remedy, and every other line here would point at the wrong one.
+                latestText = '已安装 v' + (installedVersion || '?') + '，重启 dsh web 后生效'
+            } else if (localInstall) {
                 latestText = updateAvailable ? '本地安装（不参与在线升级）' : '本地安装 · 已是最新'
             } else if (updateAvailable) latestText = '可升级到 v' + meta.latest
             else if (meta && meta.latest) latestText = '已是最新'
@@ -999,7 +1015,7 @@ html[data-pocket="on"] .pocket-backdrop {
             let action
             if (busy || upgrade.running) {
                 action = React.createElement('button', { type: 'button', disabled: true }, '处理中…')
-            } else if (updateAvailable && !localInstall) {
+            } else if (updateAvailable && !localInstall && !stale) {
                 action = React.createElement('button', { type: 'button', onClick: () => post('/pocket/upgrade') },
                     '升级到 v' + meta.latest)
             } else {

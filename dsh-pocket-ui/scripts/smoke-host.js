@@ -166,7 +166,8 @@ function startRegistry(payload, status = 200) {
 // tests
 // ---------------------------------------------------------------------------
 
-const ENV_KEYS = ['DSH_POCKET_REGISTRY', 'DSH_POCKET_NO_UPDATE_CHECK', 'DSH_POCKET_PKG_MANAGER']
+const ENV_KEYS = ['DSH_POCKET_REGISTRY', 'DSH_POCKET_NO_UPDATE_CHECK', 'DSH_POCKET_PKG_MANAGER',
+  'DSH_POCKET_PROFILE_ROOT']
 const savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]))
 function setEnv(patch) {
   for (const key of ENV_KEYS) delete process.env[key]
@@ -492,6 +493,80 @@ try {
     const res = await callRoute(ctx5.routes[0], '/pocket/upgrade', 'POST')
     assert.notEqual(res.body.upgrade.ok, 'ok', 'offline must not claim success')
     assert.equal(res.body.upgrade.ok, 'skip')
+  })
+
+  // -- process older than the package on disk -------------------------------
+  await check('a process older than its own package reports staleness instead of upgrading', async () => {
+    // The host half reads its version once, at import; replacing the package in
+    // place is invisible to it. This is the reported failure: a settings row
+    // showing "v0.1.4" on a v0.1.7 checkout, offering an upgrade that then died
+    // with "cannot locate the profile install root". Swap the manifest under the
+    // running copy and assert the state is named rather than acted on.
+    const pm = await makeFakePkgManager()
+    setEnv({ DSH_POCKET_REGISTRY: registry.url, DSH_POCKET_PKG_MANAGER: pm.bin })
+    const subject = await makeProfile({ dependencySpec: '^0.0.1' })
+    const m = await loadHostHalf(subject.entry)
+    const c = makeCtx()
+    m.apply(c)
+    await new Promise((r) => setTimeout(r, 150))
+
+    const before = await callRoute(c.routes[0], '/pocket/meta')
+    assert.equal(before.body.stale, false, 'a freshly loaded copy matches the disk')
+    assert.equal(before.body.installedVersion, before.body.version)
+
+    const manifestPath = path.join(subject.root, 'node_modules', PKG, 'package.json')
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    manifest.version = '9.9.9'
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
+
+    const after = await callRoute(c.routes[0], '/pocket/meta')
+    assert.equal(after.body.version, before.body.version, 'the loaded version cannot change')
+    assert.equal(after.body.installedVersion, '9.9.9', 'but the on-disk one moved')
+    assert.equal(after.body.stale, true)
+
+    const res = await callRoute(c.routes[0], '/pocket/upgrade', 'POST')
+    assert.equal(res.body.upgrade.ok, 'stale', 'a stale process must not install anything')
+    assert.match(res.body.upgrade.message, /restart dsh web/i)
+    assert.equal(await readLog(pm.log), '',
+      'the package manager must not run at all: the newer files are already on disk')
+    unload(c)
+  })
+
+  await check('an unlocatable install fails with a command, not a stack message', async () => {
+    // Reproduces the exact wording the user saw: "Automatic upgrade failed:
+    // cannot locate the profile install root". True, and useless. A copy living
+    // outside any profile, with no profile to scan, is the layout that triggers
+    // it — assert the message names what to run instead.
+    setEnv({ DSH_POCKET_REGISTRY: registry.url, DSH_POCKET_PKG_MANAGER: (await makeFakePkgManager()).bin })
+    const emptyHome = await tmpdir('pocket-nohome-')
+    const orphan = await tmpdir('pocket-orphan-')
+    await fsp.mkdir(path.join(orphan, 'lib'), { recursive: true })
+    await fsp.copyFile(path.join(pkgRoot, 'lib', 'index.js'), path.join(orphan, 'lib', 'index.js'))
+    await fsp.copyFile(path.join(pkgRoot, 'package.json'), path.join(orphan, 'package.json'))
+
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = emptyHome
+    try {
+      const m = await loadHostHalf(path.join(orphan, 'lib', 'index.js'))
+      const c = makeCtx()
+      m.apply(c)
+      await new Promise((r) => setTimeout(r, 150))
+
+      const meta = await callRoute(c.routes[0], '/pocket/meta')
+      assert.equal(meta.body.profileRoot, null, 'precondition: there is no profile to find')
+      assert.equal(meta.body.stale, false, 'precondition: this is not a staleness case')
+
+      const res = await callRoute(c.routes[0], '/pocket/upgrade', 'POST')
+      assert.equal(res.body.upgrade.ok, 'fail')
+      assert.match(res.body.upgrade.message, /dsh plugin --profile/,
+        'the message must name the command that fixes it')
+      assert.doesNotMatch(res.body.upgrade.message, /cannot locate the profile install root/,
+        'and must not be the old dead end')
+      unload(c)
+    } finally {
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+    }
   })
 } finally {
   setEnv(savedEnv)
