@@ -141,10 +141,10 @@ window.__ModuleLoader__.load({
    about the environment. */
 html[data-pocket="on"] {
   --pocket-drawer-w: min(84vw, 320px);
-  --pocket-fab: 28px;
-  --pocket-fab-gap: 10px;
-  /* One accent for the whole button, so the hairline border and the glyph read
-     as a single mark rather than two colours that happen to be nearby. */
+  /* The edge tab (see .pocket-tab). Width is the only dimension that costs
+     content, so it stays slim; the rest of the tap target is bought with height. */
+  --pocket-tab-w: 22px;
+  --pocket-tab-h: 44px;
   --pocket-accent: #4176e6;
 }
 
@@ -353,35 +353,80 @@ html[data-pocket="on"] [data-composer-input] textarea {
    text where the host uses 12px).
    Rule of thumb: scope what rewrites the host; do not scope what styles chrome
    that exists in both modes. */
-/* Bottom-left, not top-left: the drawer's own header already carries the host's
-   sidebar toggle at the top of the screen, and a second control up there reads as
-   a duplicate. The lower corner is also where the thumb already rests.
-   Sized to 28px with a hairline accent border, so it sits in the conversation
-   like a small mark rather than a floating button. */
-html[data-pocket="on"] .pocket-fab {
+/* A slim tab on the left edge, centred in the band that is actually free.
+
+   Why not a corner: the bottom band belongs to the composer. Measured at 390x844
+   (no inset) the composer card occupies x 16-374 / y 698-812, so a corner button
+   lands inside its own box — a 22x6px overlap, and because the button is
+   position: fixed at z-index 40 it is outside the composer's layer, so it would
+   also take taps meant for the input. Lifting it along the bottom edge only moved
+   the collision up to whatever the transcript's last action row happened to be.
+
+   Why not simply the middle of the screen either, which is what this placement
+   asked for: with no message history the host *centres* the composer, so the
+   middle-left is occupied in exactly the state a user first sees. Measured at
+   390x844 the composer block spans y 331-569 and the host's own 选择工作区 control
+   y 387-415, while a tab anchored at 50% would sit at y 400-444 and overlap both.
+   390x667 and 390x932 show the same collision at 45-46% of the viewport, so this
+   is a property of the host's layout rather than of one screen size.
+
+   So the anchor is the middle of the band that is genuinely free: the header's
+   bottom edge to the composer's top edge. syncTabSeat() measures both and
+   publishes --pocket-tab-top. With history the composer docks and the tab lands
+   near 45%; on an empty session it rises to about 23%, which is the centre of the
+   space it has. The fallback below is the static value measured clear in the
+   *empty* state — the worse of the two — so a page where the landmarks cannot be
+   found still gets a placement that overlaps nothing.
+
+   The shape is half a pill on purpose: square where it meets the edge, rounded on
+   the free side, so it reads as a handle belonging to the screen edge rather than
+   a card dropped on the page. That is also why the shadow is directional — a
+   symmetric elevation reads as "floating", which is exactly what this is not.
+
+   Width is the only dimension that costs content (the conversation's own left
+   gutter is about 20px), so --pocket-tab-w stays at 22px and the rest of the tap
+   target is bought with height: 44px, the iOS minimum.
+
+   left carries the safe-area inset rather than a literal 0: in portrait it
+   resolves to 0 and the tab is genuinely flush, while in landscape it steps clear
+   of the camera cutout, which on a notched phone sits at exactly this height on
+   one side. The vertical anchor needs no matching correction: it is computed from
+   live rects, so a top inset has already moved the header by the time it is read. */
+html[data-pocket="on"] .pocket-tab {
   position: fixed;
-  bottom: calc(var(--pocket-safe-b) + var(--pocket-fab-gap));
-  left: calc(var(--pocket-safe-l) + var(--pocket-fab-gap));
-  z-index: 40;
-  width: var(--pocket-fab);
-  height: var(--pocket-fab);
+  top: var(--pocket-tab-top, 30%);
+  left: var(--pocket-safe-l, 0px);
+  /* -50% of the tab's *own* height, so whatever top says is the centre. A
+     percentage rather than a hand-computed offset, so changing the height token
+     cannot silently bias the tab off centre. */
+  transform: translateY(-50%);
+  z-index: 40;                      /* above the drawer's backdrop (20) */
+  width: var(--pocket-tab-w);
+  height: var(--pocket-tab-h);
   display: grid;
   place-items: center;
   padding: 0;
-  border: .5px solid var(--pocket-accent);
-  /* Proportional to the old 12px on 40px (30%), so shrinking the button does not
-     quietly turn it into a circle. */
-  border-radius: 8px;
+  /* Square against the edge, rounded on the free side. 8px is the host's own
+     small-control radius (--dsw-radius-sm) — deliberately not the 12px md step,
+     which on a 22px-wide box clamps to a full semicircle and loses the "handle"
+     read. */
+  border-radius: 0 var(--dsw-radius-sm, 8px) var(--dsw-radius-sm, 8px) 0;
+  /* The fill alone cannot carry the tab: --dsw-alias-bg-layer-2 resolves to the
+     same colour as the page background in light mode, so the hairline border and
+     the shadow are what make it visible at all. l2 (10% black / 12% white) rather
+     than l1 (4% / 6%), which disappears against the conversation background. */
+  border: .5px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, .1));
+  border-left: 0;                   /* no seam against the edge */
   background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-base, #fff));
   color: var(--pocket-accent);
-  box-shadow: var(--dsw-elevation-prominent, 0 4px 16px rgba(0, 0, 0, .18));
+  box-shadow: 2px 0 8px rgba(0, 0, 0, .08);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-html[data-pocket="on"] .pocket-fab:active {
+html[data-pocket="on"] .pocket-tab:active {
   background: var(--dsw-alias-interactive-bg-hover, rgba(128, 128, 128, .12));
 }
-html[data-pocket="on"] .pocket-fab svg { display: block; }
+html[data-pocket="on"] .pocket-tab svg { display: block; }
 
 html[data-pocket="on"] .pocket-backdrop {
   position: fixed;
@@ -714,6 +759,127 @@ html[data-pocket="on"] .pocket-backdrop {
         }
 
         // =====================================================================
+        // edge tab seating
+        // =====================================================================
+
+        /** Minimum clearance between the tab and either edge of its band. */
+        const TAB_EDGE_GAP = 8
+
+        /**
+         * The composer element observed for size changes, and the observer.
+         *
+         * Declared here, at FACTORY scope, and not next to the other mutables
+         * inside apply(). observeTabBand() and the teardown both live at this
+         * scope, so an apply-scoped binding would be invisible to them and the
+         * only symptom would be a ReferenceError on the first reconcile pass —
+         * after activation, on a device, with every offline check still green.
+         * That exact mistake has already been made once in this file.
+         */
+        let tabSeatObserver = null
+        let tabSeatObserved = null
+
+        /** The last published band centre, for the on-device probe. */
+        let lastTabSeat = null
+
+        /**
+         * Vertical centre for the edge tab, in px, published as --pocket-tab-top.
+         *
+         * The tab has to sit somewhere on the left edge, and the useful answer to
+         * "where" is the middle of the *empty band*, not the middle of the screen.
+         * Those differ exactly where it matters: with no message history the host
+         * centres the composer, so the screen's middle-left is occupied (see the
+         * stylesheet comment for the measurements). Once there is history the
+         * composer docks to the bottom and the same anchor would leave the tab
+         * hundreds of pixels too high. Measuring the band satisfies both, and
+         * self-corrects if the host moves either edge.
+         *
+         * The band runs from the header's bottom edge to the composer block's top
+         * edge. Both come from landmarks the reconciler tags, and the composer one
+         * is [data-composer-seat] rather than [data-composer-card] on purpose: on
+         * an empty session the host renders a 选择工作区 row *above* the card, so
+         * the card's top edge is about 36px too low to bound the block.
+         *
+         * Returns the centre it published, or null when it declined to publish one.
+         */
+        function syncTabSeat() {
+            const root = document.documentElement
+            const header = document.querySelector('[data-pocket-center] header')
+            const seat = document.querySelector('[data-composer-seat]')
+            // The tab's own height comes from the token rather than from a JS copy
+            // of it, so the clamp can never disagree with the box it is clamping.
+            const size = parseFloat(
+                window.getComputedStyle(root).getPropertyValue('--pocket-tab-h'))
+
+            // No landmarks, or no readable height: leave the stylesheet's own
+            // measured-safe default in place rather than inventing a position.
+            if (!header || !seat || !(size > 0)) return clearTabSeat()
+
+            const top = header.getBoundingClientRect().bottom
+            const bottom = seat.getBoundingClientRect().top
+            // A collapsed or not-yet-laid-out box reports zeros, and a band too
+            // short to hold the tab cannot be satisfied by any centre.
+            if (!(bottom > top)) return clearTabSeat()
+
+            const low = top + TAB_EDGE_GAP + size / 2
+            const high = bottom - TAB_EDGE_GAP - size / 2
+            const middle = (top + bottom) / 2
+            // When the band cannot hold the tab with a gap at each end the lower
+            // bound wins: sitting just under the header is recoverable, while
+            // sitting under the composer is the bug this placement exists to fix.
+            const centre = high < low ? low : Math.min(high, Math.max(low, middle))
+
+            const value = Math.round(centre) + 'px'
+            // Written only on change. The reconciler observes the documentElement's
+            // style attribute, so re-writing an identical value every pass is at
+            // best noise and at worst a feedback loop.
+            if (root.style.getPropertyValue('--pocket-tab-top') !== value) {
+                root.style.setProperty('--pocket-tab-top', value)
+            }
+            return centre
+        }
+
+        function clearTabSeat() {
+            document.documentElement.style.removeProperty('--pocket-tab-top')
+            return null
+        }
+
+        /**
+         * Watch the composer block for size changes.
+         *
+         * The reconciler is MutationObserver-driven and deliberately does not
+         * watch characterData, so typing a second line — which mutates a text node
+         * and nothing else — is invisible to it. Without this the band would keep
+         * whatever bounds it had when the composer was one line tall, and the tab
+         * would drift towards the composer as the input grew.
+         */
+        function observeTabBand() {
+            const seat = document.querySelector('[data-composer-seat]')
+            if (seat === tabSeatObserved) return
+            // A replaced element must be unobserved, not merely added to: the host
+            // swaps the composer out between phases, and observing every
+            // incarnation would leak one subscription per swap.
+            if (tabSeatObserver && tabSeatObserved) tabSeatObserver.unobserve(tabSeatObserved)
+            tabSeatObserved = seat
+            if (!seat) return
+            // Every browser that can render this UI has ResizeObserver, so this is
+            // insurance rather than a real branch — and it is worth the line: a
+            // throw here would abort the rest of the reconcile pass, taking the
+            // safe-area and drawer work down with it. Missing it only costs the
+            // band its re-measure on a pure text change; every state change still
+            // goes through reconcile().
+            if (typeof ResizeObserver !== 'function') return
+            if (!tabSeatObserver) tabSeatObserver = new ResizeObserver(syncTabSeat)
+            tabSeatObserver.observe(seat)
+        }
+
+        function releaseTabBand() {
+            if (tabSeatObserver) { tabSeatObserver.disconnect(); tabSeatObserver = null }
+            tabSeatObserved = null
+            lastTabSeat = null
+            clearTabSeat()
+        }
+
+        // =====================================================================
         // drawer
         // =====================================================================
 
@@ -835,10 +1001,14 @@ html[data-pocket="on"] .pocket-backdrop {
         }
 
         /**
-         * Drawer backdrop plus its toggle button, contributed to `shell.overlay`.
+         * Drawer backdrop plus its edge tab, contributed to `shell.overlay`.
          * That slot is a list whose children already get `pointer-events: auto`
          * from the host, and it sits at z-index 20 — under the drawer at 30, so
          * the backdrop dims the page without covering the panel.
+         *
+         * The tab is a sibling of the backdrop rather than a child, and the two
+         * are mutually exclusive (each renders only on its own side of `open`),
+         * so the tab never sits on top of the dimmed page.
          */
         function PocketChrome() {
             const [active, setActive] = React.useState(activeStore.get())
@@ -861,7 +1031,7 @@ html[data-pocket="on"] .pocket-backdrop {
                     ? null
                     : React.createElement('button', {
                         type: 'button',
-                        className: 'pocket-fab',
+                        className: 'pocket-tab',
                         'aria-label': '打开目录',
                         'aria-expanded': false,
                         onClick: () => setDrawerOpen(true),
@@ -1104,6 +1274,10 @@ html[data-pocket="on"] .pocket-backdrop {
                     forced: forcedMode(),
                     reason,
                     insets: lastInsets,
+                    // The tab's published band centre, or null when the override was
+                    // declined. Printed by the probe: "why is the tab at this height"
+                    // is otherwise unanswerable from a phone.
+                    tabSeat: lastTabSeat,
                 }
             }
 
@@ -1168,6 +1342,7 @@ html[data-pocket="on"] .pocket-backdrop {
                 awaitingExpand = false
                 untagLandmarks()
                 clearSafeArea()
+                releaseTabBand()
                 lastInsets = null
                 activeStore.set(false)
             }
@@ -1215,6 +1390,11 @@ html[data-pocket="on"] .pocket-backdrop {
                 // on the frame's live geometry, which the host rewrites on resize,
                 // on entering fullscreen, and whenever the drawer asks it to expand.
                 lastInsets = syncSafeArea()
+                // Same reasoning as the insets: the band is a live measurement, and
+                // the host redraws both of its edges on resize, on phase changes
+                // and whenever the composer grows.
+                observeTabBand()
+                lastTabSeat = syncTabSeat()
                 syncDrawerWithHost()
                 if (probeMode()) installProbe(reason)
             }
