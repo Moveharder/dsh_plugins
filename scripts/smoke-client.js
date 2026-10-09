@@ -202,7 +202,7 @@ check('the settings row matches the host row metrics', () => {
 })
 
 check('the drawer chrome is scoped and bails out while inactive', () => {
-  assert.ok(css.includes('html[data-pocket="on"] .pocket-fab'), 'fab styles present and scoped')
+  assert.ok(css.includes('html[data-pocket="on"] .pocket-tab'), 'tab styles present and scoped')
   assert.ok(css.includes('html[data-pocket="on"] .pocket-backdrop'), 'backdrop styles present and scoped')
   // The components must additionally bail out when inactive, because a slot
   // entry is rendered by the host at any width.
@@ -211,23 +211,140 @@ check('the drawer chrome is scoped and bails out while inactive', () => {
     'PocketChrome must return null while inactive')
 })
 
-check('the toggle button is bottom-left, hairline, and one accent colour', () => {
-  const rule = css.match(/html\[data-pocket="on"\] \.pocket-fab \{[^}]*\}/)
-  assert.ok(rule, '.pocket-fab rule present')
-  // Bottom-left, not top-left: the drawer header already carries the host's own
-  // sidebar toggle up there. Anchoring is asserted as an invariant, not a value,
-  // so changing the offset does not have to touch this test.
-  assert.match(rule[0], /bottom:\s*calc\(var\(--pocket-safe-b\)/, 'must be anchored to the bottom')
-  assert.match(rule[0], /left:\s*calc\(var\(--pocket-safe-l\)/, 'must be anchored to the left')
-  assert.ok(!/(^|\s)top:/.test(rule[0]), 'must not also be pinned to the top')
+/** Read a numeric custom property out of our own stylesheet. */
+function cssToken(name) {
+  const m = css.match(new RegExp(name + ':\\s*([0-9.]+)px'))
+  assert.ok(m, name + ' must be defined in px in the stylesheet')
+  return parseFloat(m[1])
+}
 
-  // One token drives both the border and the glyph. Two independent hex literals
-  // would drift the moment someone tweaks one of them.
+/** Split a CSS shorthand on the whitespace that is *not* inside parentheses. */
+function splitTopLevel(value) {
+  const parts = []
+  let depth = 0
+  let current = ''
+  for (const ch of value) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth -= 1
+    if (/\s/.test(ch) && depth === 0) {
+      if (current) parts.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current) parts.push(current)
+  return parts
+}
+
+/** Resolve a length written either as a literal or as a var() fallback, in px. */
+function resolvePx(value) {
+  const literal = value.match(/^([0-9.]+)(px)?$/)
+  if (literal) return parseFloat(literal[1])
+  const fallback = value.match(/,\s*([0-9.]+)(px)?\s*\)$/)
+  return fallback ? parseFloat(fallback[1]) : NaN
+}
+
+/** The declarations of the `.pocket-tab` rule, as text. */
+function tabRule() {
+  const rule = css.match(/html\[data-pocket="on"\] \.pocket-tab \{[^}]*\}/)
+  assert.ok(rule, '.pocket-tab rule present')
+  return rule[0]
+}
+
+check('the tab is a half pill: square against the edge, rounded on the free side', () => {
+  const rule = tabRule()
+  // Read as four corners rather than as a string, because that *is* the shape that
+  // was asked for: no rounding where it meets the edge, rounding on the side that
+  // faces the content. A later tweak to the shorthand cannot quietly round the
+  // edge side too without failing here.
+  //
+  // Parenthesis-aware splitting is not pedantry: the declaration is written with
+  // var() fallbacks, so a plain split on whitespace yields six tokens for four
+  // corners and every index below would land on the wrong corner.
+  const corners = splitTopLevel(rule.match(/border-radius:\s*([^;]+);/)[1])
+  assert.equal(corners.length, 4, 'border-radius must be spelled out per corner')
+  assert.equal(resolvePx(corners[0]), 0, 'top-left must be square')
+  assert.equal(resolvePx(corners[3]), 0, 'bottom-left must be square')
+  const r = resolvePx(corners[1])
+  assert.ok(r > 0, 'top-right must be rounded')
+  assert.equal(corners[1], corners[2], 'the two free corners must match')
+  // The host's small-control step. Deliberately not --dsw-radius-md (12px), which
+  // on a 22px-wide box clamps to an 11px semicircle and loses the "handle" read —
+  // which is why the step is asserted by name *and* the geometry by arithmetic.
+  assert.match(corners[1], /var\(--dsw-radius-sm/, 'radius must be the host small-control step')
+  assert.ok(r < cssToken('--pocket-tab-w') / 2,
+    'a radius at or past half the width clamps to a semicircle, got ' + r)
+  // No seam where the tab meets the edge of the screen.
+  assert.match(rule, /border-left:\s*0/, 'the edge side must not draw a border')
+})
+
+check('top names the centre, and the fallback was measured clear on its own', () => {
+  const rule = tabRule()
+  // -50% of the tab's *own* height, so whatever top resolves to is the centre. A
+  // percentage rather than a hand-computed offset: the height is a token, and a px
+  // offset would silently bias the tab the moment that token changed.
+  assert.match(rule, /transform:\s*translateY\(-50%\)/,
+    'the transform must pull the box back by exactly half its own height')
+  // top is the measured band centre, with a static fallback for the pass before
+  // measurement and for any page whose landmarks cannot be found. The fallback has
+  // to be safe by itself, so it is the value measured clear in the empty-session
+  // case — the harder of the two states, because that is where the host centres
+  // the composer and a plain 50% anchor overlaps it.
+  const anchor = rule.match(/top:\s*var\(--pocket-tab-top,\s*([0-9.]+)%\)/)
+  assert.ok(anchor, 'top must be the measured override with a percentage fallback')
+  const fallback = parseFloat(anchor[1])
+  assert.ok(fallback > 0 && fallback < 38,
+    'the fallback must stay below the 45% where the centred composer begins, got ' + fallback + '%')
+  // And it must clear the 56px header at every plausible height, or the tab would
+  // sit on the title instead of on the content.
+  const tabH = cssToken('--pocket-tab-h')
+  for (const h of [568, 667, 844, 932]) {
+    const top = h * fallback / 100 - tabH / 2
+    assert.ok(top > 56, 'the fallback must clear the header at a ' + h + 'px viewport, got ' + top)
+  }
+})
+
+check('a slim column of pixels, but a full tap target', () => {
+  const w = cssToken('--pocket-tab-w')
+  const h = cssToken('--pocket-tab-h')
+  // Width is the one dimension that costs content — the conversation's own left
+  // gutter is about 20px — so it is the dimension held down.
+  assert.ok(w <= 24, 'the tab must stay slim, got ' + w + 'px')
+  // Height costs no content at all, so it is where the touch target is bought.
+  assert.ok(h >= 44, 'the height must meet the 44px touch minimum, got ' + h + 'px')
+  assert.ok(h > w, 'the tab must be taller than it is wide')
+})
+
+check('one token drives the accent', () => {
+  // The glyph takes its colour from the same token as everything else. Two
+  // independent hex literals would drift the moment someone tweaks one of them.
   assert.match(css, /--pocket-accent:\s*#4176e6/, 'the accent token must be the requested colour')
-  assert.match(rule[0], /border:\s*\.5px solid var\(--pocket-accent\)/, 'border uses the accent token')
-  assert.match(rule[0], /color:\s*var\(--pocket-accent\)/, 'glyph colour uses the accent token')
+  assert.match(tabRule(), /color:\s*var\(--pocket-accent\)/, 'the glyph must take the accent')
   assert.equal((css.match(/#4176e6/g) || []).length, 1,
     'the hex must appear exactly once — everywhere else goes through the token')
+})
+
+check('the tab is legible even though its fill matches the page', () => {
+  const rule = tabRule()
+  // --dsw-alias-bg-layer-2 resolves to the same colour as --dsw-alias-bg-base in
+  // light mode (both neutral-bluish-00), so a tab trusting its fill would be
+  // invisible on a light page. The outline is load-bearing, not decorative, and it
+  // has to be the l2 step: l1 is 4% black, against 10% for l2.
+  assert.match(rule, /border:\s*\.5px solid var\(--dsw-alias-border-l2/,
+    'the outline must use the stronger l2 step')
+  // Directional, because an edge fixture must not read as a floating card.
+  assert.match(rule, /box-shadow:\s*[1-9]px 0 /, 'the shadow must fall away from the edge')
+})
+
+check('the tab never moves, so it has nothing to animate', () => {
+  // The old corner button transitioned `bottom`, because a growing composer moved
+  // it. This one is anchored to the viewport middle, so a transition could only
+  // ever fire on an orientation change — and the reduced-motion opt-out that
+  // accompanied the old one is gone with it.
+  assert.ok(!/transition/.test(tabRule()), 'the tab must not animate')
+  assert.ok(!/prefers-reduced-motion[^}]*\.pocket-tab/.test(css),
+    'and must need no motion opt-out')
 })
 
 check('the toggle glyph is drawn thin, on its own grid', () => {
@@ -235,7 +352,7 @@ check('the toggle glyph is drawn thin, on its own grid', () => {
   // button that reads as a solid block. Shrinking the render size alone would
   // have scaled the stroke implicitly, so the geometry is restated explicitly.
   const body = source.slice(source.indexOf('function MenuIcon')).slice(0, 700)
-  assert.match(body, /width: 16, height: 16/, 'glyph renders at 16px inside a 28px button')
+  assert.match(body, /width: 16, height: 16/, 'glyph renders at 16px inside the edge tab')
   assert.match(body, /viewBox: '0 0 16 16'/, 'glyph has its own 16-unit grid')
   const stroke = body.match(/strokeWidth: ([\d.]+)/)
   assert.ok(stroke, 'strokeWidth present')
@@ -606,6 +723,7 @@ function fakeRoot() {
     style: {
       setProperty: (k, v) => props.set(k, v),
       removeProperty: (k) => props.delete(k),
+      getPropertyValue: (k) => (props.has(k) ? props.get(k) : ''),
     },
   }
 }
@@ -724,6 +842,203 @@ check('a missing frame degrades to zero rather than throwing', () => {
   const result = fn()
   assert.equal(result.frameTop, 0, 'an unmeasurable frame reads as flush')
   assert.equal(result.topPolicy, 'not-an-immersive-display')
+})
+
+// --------------------------------------------------------------------------
+// 6. edge-tab placement — the adaptive band, and the retired placements
+// --------------------------------------------------------------------------
+//
+// Three placements were shipped and then withdrawn (bottom-left with a lift, the
+// header row, then a plain 50% anchor), so this section does three jobs: it runs
+// the band arithmetic, it pins the result to numbers taken from a real page, and
+// it makes sure the withdrawn versions cannot come back half-way.
+
+/** Read a top-level numeric const out of the client source. */
+function sourceNumber(name) {
+  const m = source.match(new RegExp('const ' + name + '\\s*=\\s*([0-9.]+)'))
+  assert.ok(m, 'const ' + name + ' must exist as a number in client.js')
+  return parseFloat(m[1])
+}
+
+/**
+ * Drive syncTabSeat() against fake landmarks and read what it published.
+ *
+ * `header` is the header's bottom edge and `seat` the composer block's top edge —
+ * the two values the function actually reads, so the test speaks in the same terms
+ * as the code. `missing` drops one landmark to exercise the decline path.
+ */
+function runTabSeat({ header = 56, seat = 698, tabH = 44, missing = null } = {}) {
+  const root = fakeRoot()
+  const boxOf = (value, kind) => ({
+    getBoundingClientRect: () => (kind === 'header' ? { bottom: value } : { top: value }),
+  })
+  const body = extractFunction(source, 'syncTabSeat') + '\n'
+    + extractFunction(source, 'clearTabSeat')
+  // eslint-disable-next-line no-new-func
+  const make = new Function('document', 'window', 'TAB_EDGE_GAP',
+    body + '\nreturn { syncTabSeat, clearTabSeat }')
+  const impl = make(
+    {
+      documentElement: root,
+      querySelector: (sel) => {
+        if (missing === 'header' && sel.includes('header')) return null
+        if (missing === 'seat' && sel.includes('composer-seat')) return null
+        if (sel.includes('header')) return boxOf(header, 'header')
+        if (sel.includes('composer-seat')) return boxOf(seat, 'seat')
+        return null
+      },
+    },
+    { getComputedStyle: () => ({ getPropertyValue: () => tabH + 'px' }) },
+    sourceNumber('TAB_EDGE_GAP'),
+  )
+  return { result: impl.syncTabSeat(), props: root.props }
+}
+
+check('the tab centres in the free band, not on the screen', () => {
+  // The two real states, measured live at 390x844. Docked, the composer block
+  // starts at y 698; on an empty session the host centres it, at y 331. A plain
+  // 50% anchor (422) lands inside the composer in that second case, which is
+  // exactly the bug this replaced.
+  const docked = runTabSeat({ header: 56, seat: 698 })
+  assert.equal(docked.result, 377, 'a docked composer puts the tab at the band centre')
+  assert.equal(docked.props.get('--pocket-tab-top'), '377px')
+
+  const empty = runTabSeat({ header: 56, seat: 331 })
+  assert.equal(empty.result, 193.5, 'an empty session raises it to the shorter band centre')
+  assert.equal(empty.props.get('--pocket-tab-top'), '194px',
+    'the published value is rounded to whole pixels')
+
+  // The invariant is the middle of the band, not the specific numbers.
+  for (const [top, bottom] of [[56, 698], [56, 331], [100, 500]]) {
+    const { result } = runTabSeat({ header: top, seat: bottom })
+    assert.equal(result, (top + bottom) / 2, 'centre of the band ' + top + ' -> ' + bottom)
+  }
+})
+
+check('the centre never leaves the band or eats its gap', () => {
+  const tabH = cssToken('--pocket-tab-h')
+  const gap = sourceNumber('TAB_EDGE_GAP')
+  for (const top of [56, 120, 300]) {
+    for (const bottom of [top + 20, top + 100, top + 400, 844]) {
+      const { result } = runTabSeat({ header: top, seat: bottom, tabH })
+      assert.ok(result !== null, 'a band of ' + (bottom - top) + 'px must still produce a centre')
+      assert.ok(result - tabH / 2 >= top,
+        'the tab must never reach into the header (band ' + top + ' -> ' + bottom + ')')
+      const low = top + gap + tabH / 2
+      const high = bottom - gap - tabH / 2
+      if (high < low) {
+        // No centre can satisfy a band this short, so the direction of the failure
+        // is chosen rather than left to arithmetic legend: just under the header,
+        // never further down into the composer.
+        assert.equal(result, low,
+          'a band too short to hold the tab must pin it just below the header')
+      } else {
+        assert.ok(result >= low && result <= high,
+          'the tab must keep its gap at both ends of the band ' + top + ' -> ' + bottom)
+      }
+    }
+  }
+})
+
+check('an unmeasurable band declines rather than guessing', () => {
+  // Removing the published value is the whole point: the stylesheet then falls back
+  // to a value measured clear, whereas a stale pixel value would keep applying
+  // after the composer had moved somewhere else entirely.
+  for (const missing of ['header', 'seat']) {
+    const { result, props } = runTabSeat({ missing })
+    assert.equal(result, null, 'a missing ' + missing + ' must decline to publish')
+    assert.equal(props.get('--pocket-tab-top'), undefined,
+      'and must remove any previously published value')
+  }
+  // A collapsed box reports an all-zero rect, which inverts the band.
+  const inverted = runTabSeat({ header: 300, seat: 100 })
+  assert.equal(inverted.result, null, 'an inverted band must decline')
+  assert.equal(inverted.props.get('--pocket-tab-top'), undefined)
+  // With no readable height there is nothing to clamp against.
+  const noHeight = runTabSeat({ tabH: 0 })
+  assert.equal(noHeight.result, null, 'an unreadable height must decline')
+  assert.equal(noHeight.props.get('--pocket-tab-top'), undefined)
+})
+
+check('the static fallback clears the composer in the state that broke 50%', () => {
+  // The fallback applies before the first measurement, and on any page whose
+  // landmarks cannot be found, so it has to be safe on its own. It is anchored to
+  // the empty-session case, the harder one: at 390x844 the host centres the
+  // composer block at y 331, against y 698 once there is history.
+  const tabH = cssToken('--pocket-tab-h')
+  const fallback = parseFloat(
+    tabRule().match(/top:\s*var\(--pocket-tab-top,\s*([0-9.]+)%\)/)[1])
+  const bottom = 844 * fallback / 100 + tabH / 2
+  assert.ok(bottom < 331,
+    'at 390x844 the fallback must clear the centred composer block, got ' + bottom)
+  // 45% is where the centred composer begins at every height measured, so anything
+  // at or above that is unsafe on the empty state.
+  assert.ok(fallback < 38, 'and must stay below the 45% threshold, got ' + fallback + '%')
+})
+
+check('the band observer is wired in, and released rather than leaked', () => {
+  // The reconciler is MutationObserver-driven and does not observe characterData,
+  // so typing a second line changes no mutation it would ever see. Without this
+  // observer the band would keep its one-line bounds indefinitely.
+  const recount = extractFunction(source, 'reconcile')
+  assert.match(recount, /observeTabBand\(\)/, 'the band must be observed on every pass')
+  assert.match(recount, /lastTabSeat = syncTabSeat\(\)/, 'and re-measured on every pass')
+
+  const observe = extractFunction(source, 'observeTabBand')
+  assert.match(observe, /if \(seat === tabSeatObserved\) return/,
+    'an unchanged composer must not be re-observed')
+  assert.match(observe, /unobserve\(tabSeatObserved\)/,
+    'a replaced composer must be unobserved, not merely added to')
+  // observeTabBand() is called between syncSafeArea() and syncDrawerWithHost(), so a
+  // throw here would abort the rest of the pass and freeze the layout on the previous
+  // frame. An optional enhancement must not be able to do that.
+  assert.match(observe, /typeof ResizeObserver !== 'function'/,
+    'a missing ResizeObserver must degrade, not abort the reconcile pass')
+
+  const release = extractFunction(source, 'releaseTabBand')
+  assert.match(release, /tabSeatObserver\.disconnect\(\)/, 'teardown must disconnect the observer')
+  assert.match(release, /clearTabSeat\(\)/, 'and remove the published offset')
+  assert.match(extractFunction(source, 'deactivate'), /releaseTabBand\(\)/,
+    'deactivate() must release the band, not just the insets')
+})
+
+check('the band observer state is declared at factory scope', () => {
+  // Not hypothetical, and not new: this exact mistake has already been made once in
+  // this file. observeTabBand() and the teardown are both factory-scope functions,
+  // so declaring these next to the other mutables inside apply() looks natural and
+  // is wrong — the binding is invisible to them. The symptom is a ReferenceError on
+  // the first reconcile pass, i.e. after activation, on a device, with every offline
+  // check still green.
+  const factoryEnd = source.indexOf('function apply(')
+  assert.ok(factoryEnd > 0, 'apply() must exist')
+  for (const name of ['tabSeatObserver', 'tabSeatObserved', 'lastTabSeat']) {
+    const decl = source.indexOf('let ' + name + ' = ')
+    assert.ok(decl !== -1, 'let ' + name + ' must be declared')
+    assert.ok(decl < factoryEnd,
+      name + ' must be declared before apply() — observeTabBand() runs at factory '
+      + 'scope and a ReferenceError here only shows up after activation')
+  }
+})
+
+check('the retired placements leave no trace', () => {
+  // Reverting a placement is where half-reverted states come from, and this check
+  // has already earned its place: after the seating machinery was deleted,
+  // deactivate() still assigned `lastFabSeat = null`. Under ESM strict mode that is
+  // a ReferenceError, so it would have thrown on every teardown — reached only
+  // after activation, on a device, with no other test covering that line.
+  //
+  // The same list catches the more common version of the same mistake: a stale
+  // selector or custom property left in the stylesheet, quietly doing nothing.
+  const retired = ['pocket-fab', 'syncFabSeat', 'observeComposer', 'FAB_DOCKED_BAND',
+    'FAB_GAP_DEFAULT', 'fabObserver', 'fabObservedCard', 'lastFabSeat', 'fabSeat']
+  for (const gone of retired) {
+    assert.ok(!source.includes(gone), 'client.js must no longer mention ' + gone)
+  }
+  assert.ok(!css.includes('--pocket-fab-'), 'and no corner-button custom properties survive')
+  // The header slot was another attempt, withdrawn before shipping, so nothing
+  // should reference it at all.
+  assert.ok(!source.includes('conversation.header.leading'),
+    'the abandoned header-slot toggle must not be referenced')
 })
 
 console.log('\nclient smoke: ' + passed + ' checks passed')

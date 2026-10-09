@@ -44,6 +44,21 @@ if (!URL_UNDER_TEST) {
 const SCREENSHOT_DIR = arg('screenshot')
 const CHROME = arg('chrome', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
 
+/**
+ * Extra Chrome flags, space-separated, via POCKET_CHROME_FLAGS.
+ *
+ * Needed inside a container or a locked-down CI runner: without the kernel's
+ * user-namespace support Chrome aborts with "sandbox initialization failed:
+ * Operation not permitted" (exit 133) before it ever writes a debugging port, so
+ * the failure looks like "chrome did not expose a debugging port" rather than
+ * like a sandbox problem. --no-sandbox is the only way past it.
+ *
+ * Off by default, because dropping the sandbox is only acceptable where the page
+ * under test is trusted.
+ */
+const EXTRA_CHROME_FLAGS = (process.env.POCKET_CHROME_FLAGS || '')
+  .split(/\s+/).filter(Boolean)
+
 /** Expected plugin version, read from package.json — never hardcode it. */
 const PKG_VERSION = JSON.parse(
   await fs.readFile(new URL('../package.json', import.meta.url), 'utf8')).version
@@ -246,6 +261,7 @@ async function launchChrome() {
     '--disable-background-networking',
     '--remote-debugging-port=0',
     '--user-data-dir=' + userDataDir,
+    ...EXTRA_CHROME_FLAGS,
     'about:blank',
   ], { stdio: ['ignore', 'ignore', 'pipe'] })
 
@@ -436,55 +452,181 @@ async function runMobile(cdp, session) {
   })()`)
   expect(scroll.over === 0, 'no phantom outer scroll', JSON.stringify(scroll))
 
-  expect(await evaluate(cdp, session, `!!document.querySelector('.pocket-fab')`), 'toggle button present')
+  expect(await evaluate(cdp, session, `!!document.querySelector('.pocket-tab')`), 'edge tab present')
 
-  // -- the toggle's shape, colour and corner --------------------------------
+  // -- the tab's shape, corner and anchoring --------------------------------
   // Measured after the cascade, because the interesting failures here (a stale
-  // `top`, a token that never reached the border) are invisible in the source.
-  const fab = await evaluate(cdp, session, `(() => {
-    const el = document.querySelector('.pocket-fab')
+  // `top`, a radius that did not survive the cascade, a control the tab covers)
+  // are invisible in the source.
+  const tab = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-tab')
     const r = el.getBoundingClientRect()
     const cs = getComputedStyle(el)
     const path = el.querySelector('svg path')
     const pcs = path ? getComputedStyle(path) : null
     return {
       w: Math.round(r.width), h: Math.round(r.height),
-      left: Math.round(r.left), top: Math.round(r.top),
-      bottomGap: Math.round(window.innerHeight - r.bottom),
-      rightGap: Math.round(window.innerWidth - r.right),
+      left: Math.round(r.left), top: Math.round(r.top), right: Math.round(r.right),
+      centreY: Math.round(r.top + r.height / 2),
+      radius: [cs.borderTopLeftRadius, cs.borderTopRightRadius,
+               cs.borderBottomRightRadius, cs.borderBottomLeftRadius],
+      edgeBorder: cs.borderLeftWidth,
       borderColor: cs.borderTopColor, borderWidth: cs.borderTopWidth,
+      shadow: cs.boxShadow,
       glyphColor: pcs ? pcs.stroke : null, strokeWidth: pcs ? pcs.strokeWidth : null,
       glyphBox: el.querySelector('svg').getAttribute('width'),
       vh: window.innerHeight, vw: window.innerWidth,
     }
   })()`)
   const ACCENT = 'rgb(65, 118, 230)'   // #4176e6
-  expectEqual(fab.w, 28, 'toggle is 28px wide')
-  expectEqual(fab.h, 28, 'toggle is 28px tall')
-  // Anchored to the bottom-left corner. Asserted against the *far* edges rather
-  // than a literal offset, so the safe-area and gap tokens stay free to move.
-  expect(fab.bottomGap < fab.vh / 2 && fab.left < fab.vw / 2,
-    'toggle sits in the bottom-left quadrant', JSON.stringify(fab))
-  expect(fab.bottomGap <= 24 && fab.left <= 24,
-    'toggle hugs the bottom-left corner (within its 10px gap)', JSON.stringify(fab))
-  expectEqual(fab.borderColor, ACCENT, 'border uses the #4176e6 accent')
-  expectEqual(fab.glyphColor, ACCENT, 'glyph uses the #4176e6 accent')
-  // Chrome reports the *used* border width, so the declared .5px comes back as
-  // 1px. The declared hairline is asserted in the smoke test; here we only care
-  // that it did not become a heavy frame.
-  expect(parseFloat(fab.borderWidth) <= 1, 'border stays a hairline',
-    'used border-width=' + fab.borderWidth)
-  expectEqual(fab.glyphBox, '16', 'glyph renders at 16px inside the 28px button')
+  expectEqual(tab.w, 22, 'tab is 22px wide')
+  expectEqual(tab.h, 44, 'tab is 44px tall (the touch minimum, bought with height)')
+  // Flush to the left edge and centred on the viewport. Both are asserted against
+  // the viewport rather than against literal offsets, so the safe-area tokens stay
+  // free to move; the inset is 0 in the emulator, which is the portrait case.
+  expect(tab.left <= 1, 'tab is flush against the left edge', JSON.stringify(tab))
+  // The requested shape: square where it meets the edge, rounded on the free side.
+  expectEqual(tab.radius[0], '0px', 'top-left corner is square')
+  expectEqual(tab.radius[3], '0px', 'bottom-left corner is square')
+  expect(parseFloat(tab.radius[1]) > 0, 'top-right corner is rounded', tab.radius[1])
+  expectEqual(tab.radius[1], tab.radius[2], 'the two free corners match')
+  // A radius at or past half the width clamps to a semicircle and the "handle"
+  // read is lost — the reason the host's md step was rejected for this box.
+  expect(parseFloat(tab.radius[1]) < tab.w / 2, 'the radius is not a semicircle', tab.radius[1])
+  expectEqual(tab.edgeBorder, '0px', 'no border is drawn against the edge')
+  // The fill is the same colour as the page in light mode, so the outline and the
+  // shadow are what make the tab visible at all. Both are load-bearing.
+  expect(tab.borderColor !== 'rgba(0, 0, 0, 0)', 'the outline is actually painted', tab.borderColor)
+  expect(parseFloat(tab.borderWidth) <= 1, 'border stays a hairline',
+    'used border-width=' + tab.borderWidth)
+  expect(tab.shadow !== 'none', 'a shadow separates the tab from the page', tab.shadow)
+  expectEqual(tab.glyphColor, ACCENT, 'glyph uses the #4176e6 accent')
+  expectEqual(tab.glyphBox, '16', 'glyph renders at 16px inside the 22px-wide tab')
   // Computed stroke-width comes back with a unit ("1.25px"), so parseFloat it.
-  expect(parseFloat(fab.strokeWidth) <= 1.3, 'glyph stroke is thin, not a block',
-    'strokeWidth=' + fab.strokeWidth)
-  // A 28px control is below the 44px touch-target guideline, so it must at least
-  // be genuinely hittable at its centre — checked by the click below. Report the
-  // geometry and the stack when it is not: "covered by something" is the least
-  // actionable message a hit-test can produce.
-  const fabHit = await evaluate(cdp, session, `(() => {
-    const el = document.querySelector('.pocket-fab')
-    if (!el) return { ok: false, why: 'no .pocket-fab element' }
+  expect(parseFloat(tab.strokeWidth) <= 1.3, 'glyph stroke is thin, not a block',
+    'strokeWidth=' + tab.strokeWidth)
+
+  // -- the adaptive anchor ---------------------------------------------------
+  // The anchor is the middle of the free left band, measured live: the header's
+  // bottom edge to the composer *block's* top edge. Computed here from the same two
+  // rects the plugin reads, so a constant that happens to match on one phone cannot
+  // pass. The block, not the card: on an empty session the host renders a 选择工作区
+  // row above the card, leaving the card's top edge ~36px too low to bound what the
+  // tab has to clear.
+  const band = await evaluate(cdp, session, `(() => {
+    const header = document.querySelector('[data-pocket-center] header')
+    const seat = document.querySelector('[data-composer-seat]')
+    const el = document.querySelector('.pocket-tab')
+    if (!header || !seat || !el) return null
+    const h = header.getBoundingClientRect()
+    const s = seat.getBoundingClientRect()
+    const c = document.querySelector('[data-composer-card]')
+    return {
+      top: Math.round(h.bottom), bottom: Math.round(s.top),
+      cardTop: c ? Math.round(c.getBoundingClientRect().top) : null,
+      published: getComputedStyle(el).top,
+      anchor: getComputedStyle(document.documentElement).getPropertyValue('--pocket-tab-top').trim(),
+    }
+  })()`)
+  if (!band) {
+    record(false, 'the band landmarks are reachable',
+      'no [data-pocket-center] header or [data-composer-seat]')
+  } else {
+    const expected = (band.top + band.bottom) / 2
+    expect(Math.abs(parseFloat(band.published) - expected) <= 1,
+      'the anchor is the centre of the live free band',
+      'published ' + band.published + ' for a band of ' + band.top + ' -> ' + band.bottom)
+    expect(Math.abs(tab.centreY - parseFloat(band.published)) <= 1,
+      'and the tab actually sits there',
+      'tab centre ' + tab.centreY + ' vs published ' + band.published)
+    expectEqual(band.anchor, band.published,
+      'the token and the used value agree (no other rule is winning)')
+    // The placement's whole justification.
+    expect(tab.top + tab.h <= band.bottom,
+      'the tab clears the composer block entirely',
+      'tab bottom ' + (tab.top + tab.h) + ' vs block top ' + band.bottom +
+      ', card top ' + band.cardTop)
+  }
+
+  // -- and it follows the band rather than sitting at a fixed offset ---------
+  // The composer is forced to the bottom with a stylesheet rule — no host data, no
+  // click, no navigation — and the reconciler is woken with a resize event. A tab
+  // pinned to a constant cannot move; only one that re-reads the band can. This is
+  // the same isolation trick the previous placement's verification used, and it is
+  // the difference between testing the arithmetic and testing the wiring.
+  const beforeMove = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-tab')
+    return Math.round(el.getBoundingClientRect().top)
+  })()`)
+  await evaluate(cdp, session, `(() => {
+    const style = document.createElement('style')
+    style.setAttribute('data-verify-force', 'composer-bottom')
+    style.textContent = '[data-composer-seat] { position: fixed !important; bottom: 0 !important; }'
+    document.head.appendChild(style)
+    return true
+  })()`)
+  await sleep(400)
+  await evaluate(cdp, session, `(() => { window.dispatchEvent(new Event('resize')); return true })()`)
+  await sleep(700)
+  const afterMove = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-tab')
+    const header = document.querySelector('[data-pocket-center] header')
+    const seat = document.querySelector('[data-composer-seat]')
+    return {
+      top: Math.round(el.getBoundingClientRect().top),
+      published: getComputedStyle(el).top,
+      bandTop: Math.round(header.getBoundingClientRect().bottom),
+      bandBottom: Math.round(seat.getBoundingClientRect().top),
+    }
+  })()`)
+  expect(afterMove.top > beforeMove + 50,
+    'docking the composer moves the tab down with the band',
+    'tab top ' + beforeMove + ' -> ' + afterMove.top +
+    ', band ' + afterMove.bandTop + ' -> ' + afterMove.bandBottom)
+  expect(Math.abs(parseFloat(afterMove.published) - (afterMove.bandTop + afterMove.bandBottom) / 2) <= 1,
+    'and the published anchor still equals the centre of the new band',
+    'published ' + afterMove.published + ' for ' + afterMove.bandTop + ' -> ' + afterMove.bandBottom)
+  expect(afterMove.top + tab.h <= afterMove.bandBottom,
+    'and the tab still clears the composer after moving',
+    'tab bottom ' + (afterMove.top + tab.h) + ' vs block top ' + afterMove.bandBottom)
+
+  // Undo, so every later assertion measures the real layout.
+  await evaluate(cdp, session, `(() => {
+    for (const s of [...document.querySelectorAll('style[data-verify-force]')]) s.remove()
+    window.dispatchEvent(new Event('resize'))
+    return true
+  })()`)
+  await sleep(700)
+
+  // Nothing interactive may sit under the tab. The left gutter is prose in an empty
+  // session, but that is a property of the host's layout rather than of the host's
+  // contract, so it is measured instead of assumed — and it is the check that
+  // caught the 选择工作区 row when the anchor was a plain 50%.
+  const underTab = await evaluate(cdp, session, `(() => {
+    const r = document.querySelector('.pocket-tab').getBoundingClientRect()
+    const out = []
+    for (const el of document.querySelectorAll('button, a[href], [role="button"], input, textarea, select')) {
+      if (el.classList.contains('pocket-tab')) continue
+      const b = el.getBoundingClientRect()
+      if (b.width === 0 || b.height === 0) continue
+      const overlapW = Math.min(r.right, b.right) - Math.max(r.left, b.left)
+      const overlapH = Math.min(r.bottom, b.bottom) - Math.max(r.top, b.top)
+      if (overlapW > 0 && overlapH > 0) {
+        out.push({ tag: el.tagName.toLowerCase(),
+                   label: el.getAttribute('aria-label') || (el.textContent || '').trim().slice(0, 24),
+                   box: [b.left, b.top, b.right, b.bottom].map(Math.round) })
+      }
+    }
+    return out
+  })()`)
+  expect(underTab.length === 0, 'nothing interactive sits under the tab', JSON.stringify(underTab))
+
+  // Present and laid out is not the same as *reachable*. Report the whole chain
+  // when the hit lands elsewhere: "covered by something" is the least actionable
+  // message a hit-test can produce.
+  const tabHit = await evaluate(cdp, session, `(() => {
+    const el = document.querySelector('.pocket-tab')
+    if (!el) return { ok: false, why: 'no .pocket-tab element' }
     const r = el.getBoundingClientRect()
     const x = r.left + r.width / 2, y = r.top + r.height / 2
     const hit = document.elementFromPoint(x, y)
@@ -500,26 +642,26 @@ async function runMobile(cdp, session) {
       onTop: describe(hit),
       stack: (document.elementsFromPoint(x, y) || []).slice(0, 4).map(describe),
       self: { position: cs.position, pointerEvents: cs.pointerEvents, visibility: cs.visibility,
-              opacity: cs.opacity, zIndex: cs.zIndex, bottom: cs.bottom, transform: cs.transform },
-      // An ancestor with pointer-events:none makes the button unhittable while
+              opacity: cs.opacity, zIndex: cs.zIndex, left: cs.left, top: cs.top, transform: cs.transform },
+      // An ancestor with pointer-events:none makes the tab unhittable while
       // every one of its own computed values still looks correct. A clipping
       // ancestor does the same by geometry. Report both, with boxes.
       ancestorPointerEvents: (() => {
         const out = []
         for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
           const s = getComputedStyle(n)
-          const r = n.getBoundingClientRect()
+          const b = n.getBoundingClientRect()
           out.push(describe(n) + ' pe=' + s.pointerEvents + ' ov=' + s.overflow
             + ' clip=' + s.clipPath + ' tr=' + (s.transform === 'none' ? '-' : 'yes')
-            + ' box=' + [r.left, r.top, r.width, r.height].map(Math.round).join(','))
+            + ' box=' + [b.left, b.top, b.width, b.height].map(Math.round).join(','))
         }
         return out
       })(),
       // An inert or aria-hidden ancestor removes a subtree from hit testing *and*
       // from elementsFromPoint — which is why the answer here can be "nothing at
-      // all" at a point where a laid-out button provably sits. The harness
-      // dismisses the host's first-run notice by clearing #root, so this is how a
-      // leftover modal state gets spotted rather than blamed on the plugin.
+      // all" at a point where a laid-out tab provably sits. The harness dismisses
+      // the host's first-run notice by clearing #root, so this is how a leftover
+      // modal state gets spotted rather than blamed on the plugin.
       inertChain: (() => {
         const out = []
         for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
@@ -533,12 +675,13 @@ async function runMobile(cdp, session) {
       })(),
     }
   })()`)
-  expect(fabHit.ok, 'toggle is hit-testable at its centre', JSON.stringify(fabHit))
+  expect(tabHit.ok, 'the tab is hit-testable at its centre', JSON.stringify(tabHit))
 
   // The conversation header used to reserve 52px on the left to clear the toggle
-  // while it sat in the top-left corner. Now that the toggle is at the bottom,
-  // that reservation is dead weight and the title must get the ordinary inset
-  // back — the safe-area inset is 0 in the emulator, so this reads the plain 12px.
+  // while it sat in the top-left corner. The toggle has since moved out of the
+  // header entirely — first to the bottom-left, now to the mid-left edge — so that
+  // reservation is dead weight and the title must get the ordinary inset back. The
+  // safe-area inset is 0 in the emulator, so this reads the plain 12px.
   const header = await evaluate(cdp, session, `(() => {
     const el = document.querySelector('[data-pocket-center] header')
     if (!el) return null
@@ -559,7 +702,7 @@ async function runMobile(cdp, session) {
   }
 
   // -- open the drawer ------------------------------------------------------
-  await clickElement(cdp, session, '.pocket-fab')
+  await clickElement(cdp, session, '.pocket-tab')
   await sleep(500)
 
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
@@ -670,7 +813,7 @@ async function runMobile(cdp, session) {
 
   // -- and it must still open again afterwards ------------------------------
   // Adopting the host's collapse must not wedge the drawer shut.
-  await clickElement(cdp, session, '.pocket-fab')
+  await clickElement(cdp, session, '.pocket-tab')
   await sleep(700)
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
     'the drawer reopens after being closed with the host button')
@@ -696,7 +839,7 @@ async function runMobile(cdp, session) {
   // Reopen the drawer first: that is the real path (you tap the settings entry
   // inside the drawer), and it is also the state in which a transform on the
   // drawer would trap the sheet. Keeps the regression honest.
-  await clickElement(cdp, session, '.pocket-fab')
+  await clickElement(cdp, session, '.pocket-tab')
   await sleep(500)
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
     'the toggle works repeatedly (drawer reopened)')
@@ -828,7 +971,7 @@ async function runDesktop(cdp, session, { label, width, height }) {
     'no drawer state attribute')
   expectEqual(await evaluate(cdp, session, `document.querySelectorAll('[data-pocket-frame]').length`), 0,
     'no landmark tags left behind')
-  expectEqual(await evaluate(cdp, session, `document.querySelectorAll('.pocket-fab, .pocket-backdrop').length`), 0,
+  expectEqual(await evaluate(cdp, session, `document.querySelectorAll('.pocket-tab, .pocket-backdrop').length`), 0,
     'no injected chrome rendered')
 
   // The host writes grid-template-columns inline; only !important beats it. On

@@ -26,6 +26,24 @@ import { fileURLToPath } from 'node:url'
 const here = path.dirname(fileURLToPath(import.meta.url))
 const source = fs.readFileSync(path.join(here, '..', 'lib', 'client.js'), 'utf8')
 
+/**
+ * The custom properties the plugin declares in its own stylesheet.
+ *
+ * readDeclaredTokens resolves what a real getComputedStyle would: the plugin reads
+ * its own tokens back at runtime (the tab height, for the band clamp), and a stub
+ * that answers nothing would send it down the decline path for the wrong reason,
+ * silently retiring the coverage for the real one.
+ */
+function readDeclaredTokens(text) {
+  const start = text.indexOf('const CSS = `') + 'const CSS = `'.length
+  const end = text.indexOf('\n`', start)
+  const body = text.slice(start, end === -1 ? undefined : end)
+  return new Map([...body.matchAll(/(--pocket-[a-z-]+):\s*([^;]+);/g)]
+    .map((m) => [m[1], m[2].trim()]))
+}
+
+const DECLARED_TOKENS = readDeclaredTokens(source)
+
 let passed = 0
 function check(label, fn) {
   fn()
@@ -210,6 +228,9 @@ function makeDom({ frameTop = 0, frameHeight = 800, insets = {}, mode = 'browser
       paddingBottom: (insets.bottom || 0) + 'px',
       paddingLeft: (insets.left || 0) + 'px',
       paddingRight: (insets.right || 0) + 'px',
+      // Custom properties are resolved from the plugin's own stylesheet, which is
+      // where a browser would get them from too.
+      getPropertyValue: (name) => DECLARED_TOKENS.get(name) || '',
     }),
   }
 
