@@ -199,8 +199,8 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-npm run smoke                    # 四套全跑（87 项，全离线）
-node scripts/smoke-host.js       # 17 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位
+npm run smoke                    # 四套全跑（88 项，全离线）
+node scripts/smoke-host.js       # 18 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位 + manifest 自洽性
 node scripts/smoke-client.js     # 39 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析
 node scripts/smoke-mount.js      # 16 项：客户端半区真正挂到桩 DOM 上，含 teardown 不残留、按页面 base 发请求
 node scripts/smoke-probe.js      # 15 项：探针本身（含"读的是插件自己的判定"、探针与 bundle 解析一致）
@@ -235,6 +235,24 @@ CDP 覆盖：
 > 属视觉细节，未改；CDP 里仍会报出来。
 
 ## 更新记录
+
+### v0.1.7
+
+主题是**补上一个从 v0.1.0 起就名不副实的声明**——`package.json` 写着类型声明，那个文件却从来不存在。
+
+- **补上 `lib/index.d.ts`**。`package.json` 从模板继承了 `"types": "lib/index.d.ts"` 与 `exports["."].types`，但**该文件从来没有被创建过**（`git log --all -- lib/index.d.ts` 为空——不是某次误删，而是从未存在），v0.1.0 起一直如此。下游 TypeScript 项目按包名引用本包时会撞上 `TS7016: Could not find a declaration file for module 'dsh-pocket-ui'`，或在 `strict` 下静默退化成 `any`。现在按 host 半区真实导出补齐：`name` 用字面量类型、`inject` 用 `readonly ['webServer']`、`apply(ctx: unknown)`；`/pocket/*` 的响应体也一并声明为 `PocketHello` / `PocketMeta` / `PocketUpgradeResponse` / `PocketUpgradeStatus`——那是双半区之间唯一真实的契约。（`files` 已含整个 `lib`，无需额外改动即可随包发布。）
+- **新增 manifest 自洽性断言**（`scripts/smoke-host.js`）：收集 `main` / `types` / `exports` 里出现的每个路径，断言文件真实存在、且被 `files` 白名单覆盖（`package.json` 豁免，npm 总是发布它），并断言 `.d.ts` 里确实声明了 `name` / `inject` / `apply`。把 `lib/index.d.ts` 删掉时，该断言会精确报出 `package.json declares "lib/index.d.ts" but no such file exists`——即把这次的问题本身变成一条会红掉的测试。
+
+> 安装 0.1.7 时会撞上一个与本次改动无关、但会让人误以为"插件没修好"的坑：pnpm 11 起 `minimumReleaseAge` 默认 **1440 分钟（24 小时）**。本版发布后 24 小时内执行 `pnpm add`，pnpm 会在满足 semver 的候选里挑"最新的够老版本"，也就是 **0.1.4**——输出 `+ dsh-pocket-ui ^0.1.4`，**而命令是成功的**。要立刻用上本版，在 profile 的 `pnpm-workspace.yaml` 里放行：
+>
+> ```yaml
+> minimumReleaseAgeExclude:
+>   - dsh-pocket-ui
+> ```
+
+测试：
+
+- 四套无浏览器冒烟 87 → **88 项**（host 17 → 18，新增 manifest 自洽性断言）。
 
 ### v0.1.6
 
