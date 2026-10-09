@@ -548,6 +548,35 @@ check('the unreachable-host row names the remedy, not just the symptom', () => {
     'restart advice must not appear on a connected row')
 })
 
+check('a process older than its own package says so instead of offering an upgrade', () => {
+  // The failure this guards: a row reading "v0.1.4 · 可升级到 v0.1.7" on a
+  // checkout that was already v0.1.7, whose upgrade button then died with
+  // "cannot locate the profile install root". Both halves were telling the truth
+  // about different things — the host half runs the code it imported at startup
+  // and has no unload path, while the client half is served from disk and
+  // hot-reloads. The host now reports both versions, and the row has to prefer
+  // the restart: an upgrade cannot fix a process that is *behind* its own
+  // package, because the newer files are already in place.
+  const body = source.slice(source.indexOf('function PocketSettingsRow'))
+  assert.match(body, /const stale = !!\(meta && meta\.stale\)/, 'the row must read the flag')
+  assert.match(body, /meta\.installedVersion/, 'and name the version that is actually on disk')
+  assert.match(body, /（进程内）/, 'the running version must be labelled as such')
+
+  // Order is the assertion: every branch below would name the wrong remedy for a
+  // stale process — `localInstall` points at "edit the source", and
+  // `updateAvailable` at a button that cannot possibly help.
+  const staleAt = body.indexOf('if (stale)')
+  assert.ok(staleAt !== -1, 'there must be a stale branch')
+  assert.ok(staleAt < body.indexOf('} else if (localInstall)'),
+    'stale must be decided before the local-install line')
+  assert.ok(staleAt < body.indexOf('updateAvailable && !localInstall && !stale'),
+    'and before the upgrade offer')
+
+  assert.match(body, /updateAvailable && !localInstall && !stale/,
+    'a stale process must not be offered an upgrade at all')
+  assert.match(body, /重启 dsh web 后生效/, 'the stale row must name the restart remedy')
+})
+
 // --------------------------------------------------------------------------
 
 

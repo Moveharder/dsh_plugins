@@ -199,9 +199,9 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-npm run smoke                    # 四套全跑（88 项，全离线）
-node scripts/smoke-host.js       # 18 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位 + manifest 自洽性
-node scripts/smoke-client.js     # 39 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析
+npm run smoke                    # 四套全跑（91 项，全离线）
+node scripts/smoke-host.js       # 20 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位 + manifest 自洽性 + 进程落后于磁盘
+node scripts/smoke-client.js     # 40 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析、stale 行的优先级
 node scripts/smoke-mount.js      # 16 项：客户端半区真正挂到桩 DOM 上，含 teardown 不残留、按页面 base 发请求
 node scripts/smoke-probe.js      # 15 项：探针本身（含"读的是插件自己的判定"、探针与 bundle 解析一致）
 node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screenshot ./shots
@@ -235,6 +235,23 @@ CDP 覆盖：
 > 属视觉细节，未改；CDP 里仍会报出来。
 
 ## 更新记录
+
+### v0.1.8
+
+主题是**让「进程里跑的不是磁盘上那份」这种状态自己说出来**。
+
+- **host 半区同时上报「进程内版本」与「磁盘上的版本」**。`VERSION` 是模块被 `import` 时读一次的，因此它描述的是*正在运行的代码*，而不是用户装了什么；client 半区却是从磁盘现取、会热更的。更新完不重启就会出现「行上写着 v0.1.4、检出却是 v0.1.7」——谁也解释不了，而它还会去点一个注定失败的升级按钮。`/pocket/meta` 现在多返回 `installedVersion` 与 `stale`（两者不一致即为真）。
+  > 这一处必须用 `fs.readFileSync` 重新读，不能用 `createRequire()`：`req()` 对 `.json` 走的是 CJS 加载器缓存，第二次拿回的正是这份函数要绕开的缓存。
+- **状态行优先说「重启」，而不是继续叫你去升级**。stale 时行内显示「v0.1.4（进程内） · 已安装 v0.1.7，重启 dsh web 后生效」，并且**不再提供升级按钮**——升级救不了一个落后于自己安装包的进程，新文件本来就已经在磁盘上了。这个分支必须排在「本地安装」和「可升级」**之前**，否则那两条都会指向错的解法（一个说"改源码"，一个给一个不可能有用的按钮）。
+- **`升级` 不再以一句无法执行的报错收场**。原先定位不到安装位置时抛出 `cannot locate the profile install root`——是真话，但用户没法照着做。现在两种情形都给出可执行的出路：
+  - 进程落后于磁盘 → `ok: 'stale'`，**什么都不装**，直接让你重启；
+  - 确实找不到 profile → `ok: 'fail'`，并写出该执行的命令（`dsh plugin --profile <profile> add dsh-pocket-ui@<版本>`）。
+
+测试：
+
+- 四套无浏览器冒烟 88 → **91 项**（host 18 → 20，client 39 → 40）。
+- 新增两条 host 断言：在运行中的副本脚下改掉 `package.json` 之后必须报 `stale`，并断言**包管理器一次都没被调用过**；以及「定位不到 profile」时消息里必须含可执行命令、且不再是那句旧死路。
+- 现场验证（另起 3081 独立实例）：`version=0.1.7 / installedVersion=0.1.7 / stale=false` → 把磁盘改成 0.1.8 → `version=0.1.7 / installedVersion=0.1.8 / stale=true` → `POST /pocket/upgrade` 返回 `ok: 'stale'`；还原后回到 `stale=false`。
 
 ### v0.1.7
 
