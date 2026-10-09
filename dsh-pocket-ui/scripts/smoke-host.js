@@ -189,6 +189,55 @@ try {
     assert.ok(bare.inject.includes('webServer'), 'inject must include webServer')
   })
 
+  await check('every path the manifest declares exists and is published', () => {
+    // `package.json` is a set of promises about files on disk. A `types` entry
+    // naming a file nobody ever wrote is not a cosmetic slip: editors and a
+    // downstream `tsc` resolve the declared path, find nothing, and either error
+    // or quietly fall back to `any`. This package shipped exactly that state —
+    // `types: lib/index.d.ts` for a file absent from every commit — so the check
+    // derives the list from the manifest instead of trusting it.
+    const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'))
+    const norm = (p) => String(p).replace(/^\.\//, '')
+
+    const declared = []
+    for (const field of ['main', 'types']) {
+      if (pkg[field]) declared.push(norm(pkg[field]))
+    }
+    for (const [key, value] of Object.entries(pkg.exports || {})) {
+      const targets = typeof value === 'string' ? [value] : Object.values(value || {})
+      for (const target of targets) {
+        assert.equal(typeof target, 'string',
+          'exports["' + key + '"] must resolve to a plain path, got: ' + JSON.stringify(target))
+        declared.push(norm(target))
+      }
+    }
+    assert.ok(declared.length >= 4, 'the manifest should declare its entry points')
+
+    for (const rel of declared) {
+      assert.ok(fs.existsSync(path.join(pkgRoot, rel)),
+        'package.json declares "' + rel + '" but no such file exists')
+    }
+
+    // Declared-but-not-shipped is the same defect one release later, so assert the
+    // `files` whitelist would actually carry each one. `package.json` is exempt:
+    // npm always publishes it regardless of the whitelist. This is a proxy for
+    // `npm pack --dry-run`, which is what actually decides.
+    const whitelist = (pkg.files || []).map((entry) => String(entry).replace(/\/+$/, ''))
+    const covered = (rel) => whitelist.some((entry) => rel === entry || rel.startsWith(entry + '/'))
+    for (const rel of declared) {
+      if (rel === 'package.json') continue
+      assert.ok(covered(rel), '"' + rel + '" is declared but not covered by `files`')
+    }
+
+    // And the declaration has to describe the real host half, so it must name all
+    // three exports the loader contract depends on.
+    const dts = fs.readFileSync(path.join(pkgRoot, 'lib', 'index.d.ts'), 'utf8')
+    for (const member of ['name', 'inject', 'apply']) {
+      assert.match(dts, new RegExp('\\b' + member + '\\b'),
+        'lib/index.d.ts must declare the `' + member + '` export')
+    }
+  })
+
   // -- routes --------------------------------------------------------------
   setEnv({ DSH_POCKET_NO_UPDATE_CHECK: '1' })
   const offline = await makeProfile({ dependencySpec: '^0.0.1' })
