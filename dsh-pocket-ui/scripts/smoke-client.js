@@ -262,10 +262,32 @@ check('nothing closes the drawer on a click inside the panel', () => {
     'no click listener may be installed to infer "the user is done" from a tap')
   assert.ok(source.includes('function syncDrawerWithHost'),
     'the host sidebar state must be adopted as the drawer close signal')
-  const reconcile = source.slice(source.indexOf('function reconcile()'))
-  assert.match(reconcile.slice(0, 400), /syncDrawerWithHost\(\)/,
+  assert.match(extractFunction(source, 'reconcile'), /syncDrawerWithHost\(\)/,
     'syncDrawerWithHost must run on every reconcile pass')
 })
+
+/**
+ * Extract a whole function body by brace matching.
+ *
+ * Slicing a fixed number of characters after the declaration is what the first
+ * version of this check did, and it silently stopped seeing the code it was
+ * asserting on the moment a comment was added above the call — the assertion
+ * failed while the behaviour was correct. Brace matching is barely more code and
+ * cannot drift.
+ */
+function extractFunction(text, name) {
+  const start = text.indexOf('function ' + name + '(')
+  assert.ok(start !== -1, 'function ' + name + ' must exist')
+  let depth = 0
+  for (let i = text.indexOf('{', start); i >= 0 && i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1
+    else if (text[i] === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(start, i + 1)
+    }
+  }
+  throw new Error('unbalanced braces in ' + name)
+}
 
 check('closing the drawer never toggles a sidebar the host already collapsed', () => {
   // The host's 收起侧边栏 button collapses the sidebar itself and the reconciler
@@ -348,9 +370,54 @@ check('the sheet height cap prefers dvh over vh', () => {
     'dvh must follow the fallback so it wins where supported')
 })
 
-check('safe-area insets are consumed', () => {
-  assert.match(css, /env\(safe-area-inset-top/)
-  assert.match(css, /env\(safe-area-inset-bottom/)
+check('the stylesheet never declares the safe-area tokens itself', () => {
+  // This is the shape of the phantom-title-bar bug, asserted rather than
+  // described. If the sheet declared `--pocket-safe-t: env(safe-area-inset-top)`,
+  // every rule would pad by an inset the plugin has not verified the page needs —
+  // and a var() fallback cannot express the alternative, because
+  // `var(--x, env(safe-area-inset-top))` is invalid CSS.
+  assert.ok(!/--pocket-safe-[tblr]\s*:/.test(css),
+    'the inset tokens must be written by syncSafeArea(), not declared in CSS')
+  assert.ok(/var\(--pocket-safe-t\)/.test(css), 'consumers still read the token')
+  assert.ok(/var\(--pocket-safe-b\)/.test(css), 'consumers still read the token')
+})
+
+check('the insets are measured through a real element, not read as token text', () => {
+  // `getPropertyValue('--pocket-safe-t')` returns the *specified* stream, i.e.
+  // the literal string "env(safe-area-inset-top, 0px)". Only inheriting the
+  // token into an element and reading a resolved length property substitutes it.
+  const fn = extractFunction(source, 'probeInset')
+  assert.match(fn, /env\(safe-area-inset-/, 'the probe must ask for the env()')
+  assert.match(fn, /getComputedStyle\(el\)\[prop\]/,
+    'and must read the resolved length back off a real element')
+  assert.match(fn, /position:absolute;left:-9999px/,
+    'the probe element must be out of flow: it exists during a layout pass')
+})
+
+check('the inset policy is explicit, gated on both geometry and environment', () => {
+  // Either gate alone is wrong. Geometry misses an in-app WebView whose frame is
+  // flush to its own viewport while the device chrome sits above it; display mode
+  // alone misses a browser tab whose frame is pushed down by a wrapper.
+  const fn = extractFunction(source, 'syncSafeArea')
+  assert.match(fn, /frameTop\s*>\s*2/, 'the geometry gate must be measured, not assumed')
+  assert.match(fn, /display-mode:\s*standalone/, 'the environment gate must be queried')
+  assert.match(fn, /topPolicy/, 'the decision must be named, so the probe can report it')
+  assert.match(fn, /const top = topPolicy === 'applied' \? insetTop : 0/,
+    'exactly one policy value applies the inset')
+  assert.match(fn, /room\s*>=\s*insetBottom\s*\?\s*insetBottom\s*:\s*0/,
+    'a shell with no room left clamps its bottom inset to zero')
+  assert.ok(/--pocket-inset-raw-t/.test(fn),
+    'the raw inset is published too, so "ignored" and "reported zero" stay distinguishable')
+})
+
+check('the insets are re-measured on every pass and cleared on teardown', () => {
+  // They depend on live geometry: the host rewrites the frame on resize, on
+  // entering fullscreen, and whenever the drawer asks the sidebar to expand.
+  assert.match(extractFunction(source, 'reconcile'), /lastInsets = syncSafeArea\(\)/)
+  assert.match(extractFunction(source, 'activate'), /syncSafeArea\(\)/,
+    'activate must measure before the first styled frame, not one frame later')
+  assert.match(extractFunction(source, 'deactivate'), /clearSafeArea\(\)/,
+    'teardown must leave no inline tokens behind')
 })
 
 check('reduced motion is respected', () => {
@@ -384,5 +451,250 @@ check('a throwing subscriber cannot break the others', () => {
 })
 
 // --------------------------------------------------------------------------
+// 4b. host-route resolution
+// --------------------------------------------------------------------------
+//
+// The settings row is the user's only window into the host half, and it talks to
+// it over HTTP. Those paths must be resolved document-relative, never
+// root-absolute: a root-absolute path ignores a reverse-proxy mount point and,
+// in the desktop shell, resolves under the `dsh-app://app/` scheme.
+//
+// That second case is where the priority matters, and it is the opposite of the
+// platform's own `remoteStreamUrl()` order. The shell's `protocol.handle`
+// intercepts only its static assets on that origin and forwards *everything
+// else* to the Host through `forwardWebRequest`, which keeps the pathname and
+// attaches the Host cookie — so `dsh-app://app/pocket/meta` DOES reach the
+// plugin. `streamBaseUrl` instead names the Host's own origin, which the platform
+// uses for its WebSocket mux (`url.protocol = 'wss:'`, not policed by CORS, and
+// the shell has a dedicated `ws://127.0.0.1/*` cookie rule for it). Aiming a
+// cross-origin `fetch()` there fails: no cookie, no `access-control-allow-origin`.
+
+check('host routes resolve against the document base, then the transport, then the mount', () => {
+  const { hostUrl } = mod.__internal
+  assert.equal(typeof hostUrl, 'function', 'hostUrl must be exported for this test')
+
+  const prevDocument = globalThis.document
+  const prevTransport = globalThis.__DSH_TRANSPORT__
+  try {
+    globalThis.document = { baseURI: 'http://127.0.0.1:3080/' }
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'http://127.0.0.1:3080/pocket/meta',
+      'a plain served page resolves against its own document base')
+
+    // The load-bearing case. `dsh-app://app/` is the base the shell routes to the
+    // Host, so it must win even though a transport is published; the transport's
+    // cross-origin origin would be refused for want of CORS headers.
+    globalThis.document = { baseURI: 'dsh-app://app/' }
+    globalThis.__DSH_TRANSPORT__ = { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' }
+    assert.equal(hostUrl('/pocket/meta'), 'dsh-app://app/pocket/meta',
+      'the document base must win: the shell forwards that origin to the Host with its cookie')
+
+    // A mount point must survive: the route is document-relative, not root-absolute.
+    globalThis.document = { baseURI: 'http://nas.local:3080/dsh/' }
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta',
+      'a reverse-proxy prefix is part of the route')
+
+    // No usable document base: only then is the published transport worth trying.
+    globalThis.document = {}
+    globalThis.__DSH_TRANSPORT__ = { ownsHost: true, streamBaseUrl: 'http://127.0.0.1:55531/' }
+    assert.equal(hostUrl('/pocket/meta'), 'http://127.0.0.1:55531/pocket/meta',
+      'the transport is the fallback for a page with no base of its own')
+
+    // No base at all (a hostile/partial stub) must degrade to a relative URL
+    // rather than inventing a root-absolute one.
+    globalThis.document = {}
+    delete globalThis.__DSH_TRANSPORT__
+    assert.equal(hostUrl('/pocket/meta'), 'pocket/meta')
+
+    // A leading slash on the *input* must not smuggle root-absoluteness back in.
+    globalThis.document = { baseURI: 'http://nas.local:3080/dsh/' }
+    assert.equal(hostUrl('pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta')
+    assert.equal(hostUrl('///pocket/meta'), 'http://nas.local:3080/dsh/pocket/meta')
+  } finally {
+    globalThis.document = prevDocument
+    if (prevTransport === undefined) delete globalThis.__DSH_TRANSPORT__
+    else globalThis.__DSH_TRANSPORT__ = prevTransport
+  }
+})
+
+check('no host request is hard-coded to a root-absolute path', () => {
+  // Structural, because this is a mistake that is invisible in review and only
+  // shows up as "the plugin is installed but the host never answers".
+  const calls = source.match(/\bfetch\(/g) || []
+  assert.equal(calls.length, 4, 'expected the four known call sites, got ' + calls.length)
+  assert.ok(!/fetch\(\s*['"]\//.test(source),
+    'a root-absolute literal bypasses hostUrl() and breaks a path-prefixed deployment')
+  // The transport is the fallback inside hostUrl(), never a base a call site
+  // reaches for directly — that is the cross-origin request that fails.
+  assert.ok(!/fetch\([^)]*__DSH_TRANSPORT__/.test(source),
+    'no call site may fetch against the transport base directly')
+})
+
+check('the unreachable-host row names the remedy, not just the symptom', () => {
+  // "host 半区无响应" on its own sends the user hunting for a broken plugin when the
+  // real state is usually "the host half has not been loaded yet". It cannot be
+  // loaded without restarting the server, because the module is already imported
+  // into the Node process and has no unload path (see README, 开发循环). So the row
+  // has to say that — otherwise the only evidence the user has is a dead-looking
+  // update button, which is what made this hard to diagnose in the first place.
+  const body = source.slice(source.indexOf('function PocketSettingsRow'))
+  assert.match(body, /if \(link === 'down'\) hint\.push\('[^']*dsh web[^']*'\)/,
+    'a down row must name the restart remedy')
+  // And it must be conditional: a healthy row may not carry restart advice.
+  const hintBlock = body.slice(body.indexOf('const hint = ['),
+    body.indexOf('return React.createElement'))
+  assert.ok(!/重启/.test(hintBlock.replace(/if \(link === 'down'\)[^\n]*\n/, '')),
+    'restart advice must not appear on a connected row')
+})
+
+// --------------------------------------------------------------------------
+
+
+// --------------------------------------------------------------------------
+// 5. safe-area clamp — the arithmetic, not the shape of the source
+// --------------------------------------------------------------------------
+//
+// The checks above assert what syncSafeArea() is *made of*. These run it. The
+// function is pure with respect to four injected collaborators, so it can be
+// evaluated against a fake frame and fake insets and its published values
+// asserted exactly — which is the only way to be sure the phantom-title-bar fix
+// actually zeroes the strip rather than merely mentioning it.
+
+/** Extract one function declaration and evaluate it with injected globals. */
+function evalWith(sourceText, fnName, globals) {
+  const body = extractFunction(sourceText, fnName)
+  const names = Object.keys(globals)
+  // eslint-disable-next-line no-new-func
+  const make = new Function(...names, body + '\nreturn ' + fnName)
+  return make(...names.map((n) => globals[n]))
+}
+
+function fakeRoot() {
+  const props = new Map()
+  return {
+    props,
+    style: {
+      setProperty: (k, v) => props.set(k, v),
+      removeProperty: (k) => props.delete(k),
+    },
+  }
+}
+
+function runClamp({ frameTop = 0, frameHeight = 844, insets = {}, viewport = 844, mode = 'standalone', matchMediaThrows = false }) {
+  const root = fakeRoot()
+  const fn = evalWith(source, 'syncSafeArea', {
+    document: { documentElement: root },
+    window: {
+      innerHeight: viewport,
+      visualViewport: { height: viewport },
+      matchMedia: (q) => {
+        // `mode: 'unknown'` models an engine that cannot answer at all, which is
+        // the case the conservative branch exists for. Passing a mode name that
+        // simply does not match any query is not the same thing: a browser that
+        // matches nothing IS a browser.
+        if (matchMediaThrows) throw new Error('matchMedia unavailable')
+        return { matches: q === '(display-mode: ' + mode + ')' }
+      },
+    },
+    findFrame: () => ({ getBoundingClientRect: () => ({ top: frameTop, height: frameHeight }) }),
+    probeInset: (side) => insets[side] || 0,
+  })
+  return { result: fn(), props: root.props }
+}
+
+check('an immersive shell flush with the viewport keeps the full top inset', () => {
+  // The notch case: a standalone/fullscreen view really does start under the
+  // status bar, so the first row has to move down or it is unreachable.
+  const { result, props } = runClamp({ frameTop: 0, mode: 'standalone', insets: { top: 48, bottom: 24 } })
+  assert.equal(result.top, 48)
+  assert.equal(result.pushedDown, false)
+  assert.equal(result.topPolicy, 'applied')
+  assert.equal(props.get('--pocket-safe-t'), '48px')
+  assert.equal(props.get('--pocket-inset-raw-t'), '48px')
+})
+
+check('a non-immersive display drops the top inset even when the frame is flush', () => {
+  // This is the reported bug, and the reason geometry alone is not enough: an
+  // in-app WebView can report the status-bar inset while sitting entirely below
+  // it, with its own frame flush to its own viewport. Padding by the inset then
+  // produces a ~45px blank strip that no host rule asked for.
+  const { result, props } = runClamp({ frameTop: 0, mode: 'browser', insets: { top: 45 } })
+  assert.equal(result.top, 0, 'display-mode: browser cannot be underlapping system bars')
+  assert.equal(result.topPolicy, 'not-an-immersive-display')
+  assert.equal(props.get('--pocket-safe-t'), '0px')
+  assert.equal(props.get('--pocket-inset-raw-t'), '45px', 'the device value stays visible')
+})
+
+check('an unknown display mode keeps the inset rather than gambling', () => {
+  // The conservative direction matters: dropping an inset that was real puts the
+  // first row of the sidebar under a notch, which is worse than an extra strip.
+  const { result } = runClamp({ frameTop: 0, matchMediaThrows: true, insets: { top: 44 } })
+  assert.equal(result.displayMode, 'unknown')
+  assert.equal(result.top, 44, 'an unanswerable engine keeps the inset')
+  assert.equal(result.topPolicy, 'applied')
+})
+
+check('a shell already below the device chrome drops the top inset to zero', () => {
+  // The geometry gate on its own: an immersive view whose frame is nonetheless
+  // pushed down has already had its inset spent by whoever pushed it.
+  const { result, props } = runClamp({ frameTop: 45, mode: 'standalone', insets: { top: 45 } })
+  assert.equal(result.top, 0, 'the inset has already been spent by whoever pushed the shell down')
+  assert.equal(result.topPolicy, 'shell-below-device-chrome')
+  assert.equal(props.get('--pocket-safe-t'), '0px')
+  assert.equal(props.get('--pocket-inset-raw-t'), '45px',
+    'the raw value stays visible so "ignored" is distinguishable from "reported zero"')
+})
+
+check('a sub-pixel frame offset is not mistaken for a pushed-down shell', () => {
+  // Falling the wrong way here silently drops a real notch inset, and nothing on
+  // screen would say so.
+  const { result } = runClamp({ frameTop: 0.5, mode: 'standalone', insets: { top: 44 } })
+  assert.equal(result.top, 44)
+})
+
+check('an absurd inset is treated as a misreport', () => {
+  // 96px is taller than any real status bar or notch; a WebView reporting it is
+  // describing something other than this document's overlap.
+  const { result } = runClamp({ frameTop: 0, mode: 'standalone', insets: { top: 96 } })
+  assert.equal(result.top, 0)
+  assert.equal(result.topPolicy, 'implausible-inset')
+})
+
+check('a shell with room keeps the bottom inset, a taller one does not', () => {
+  // The bottom inset is never gated on display mode: a home indicator overlaps
+  // the viewport in a browser tab too.
+  const roomy = runClamp({ mode: 'browser', frameHeight: 800, viewport: 844, insets: { bottom: 34 } })
+  assert.equal(roomy.result.bottom, 34, '34px of slack can absorb a 34px home indicator')
+
+  const tight = runClamp({ mode: 'browser', frameHeight: 844, viewport: 844, insets: { bottom: 34 } })
+  assert.equal(tight.result.bottom, 0, 'no slack means the inset would become a phantom scroll')
+  assert.equal(tight.props.get('--pocket-safe-b'), '0px')
+})
+
+check('the horizontal insets are never clamped', () => {
+  // A landscape notch inset is about the viewport edge, not about the frame's
+  // offset, so the pushing-down rule does not apply to it.
+  const { result } = runClamp({ frameTop: 45, mode: 'browser', insets: { left: 44, right: 44, top: 45 } })
+  assert.equal(result.left, 44)
+  assert.equal(result.right, 44)
+})
+
+check('a missing frame degrades to zero rather than throwing', () => {
+  const root = fakeRoot()
+  const fn = evalWith(source, 'syncSafeArea', {
+    document: { documentElement: root },
+    window: {
+      innerHeight: 844,
+      visualViewport: { height: 844 },
+      matchMedia: () => ({ matches: false }),
+    },
+    findFrame: () => null,
+    probeInset: (side) => (side === 'top' ? 40 : 0),
+  })
+  const result = fn()
+  assert.equal(result.frameTop, 0, 'an unmeasurable frame reads as flush')
+  assert.equal(result.topPolicy, 'not-an-immersive-display')
+})
 
 console.log('\nclient smoke: ' + passed + ' checks passed')

@@ -59,6 +59,51 @@ window.__ModuleLoader__.load({
         /** Debug override: ?pocket=mobile forces on, ?pocket=off forces off. */
         const FORCE_PARAM = 'pocket'
 
+        /**
+         * Resolve one host-half route. Every `/pocket/*` request must go through
+         * here. A root-absolute URL is the bug that made the settings row say
+         * "host 半区无响应" while the host half was perfectly alive: the route has
+         * to be resolved against the page's own base, never against the origin
+         * root.
+         *
+         *   - a **deployment under a path prefix** (reverse proxy / NAS) serves the
+         *     app at e.g. `/dsh/`, so the routes live under that mount point and
+         *     `/pocket/meta` would miss it.
+         *   - the DSH **desktop shell** serves the app from the `dsh-app://app/`
+         *     scheme. Its `protocol.handle` intercepts only the static assets
+         *     (`/`, `/index.html`, `/assets/*`, `/favicon.svg`,
+         *     `/manifest.webmanifest`) and forwards *everything else* on that
+         *     origin to the Host through `forwardWebRequest`, which preserves the
+         *     pathname and attaches the Host's auth cookie. So the document base
+         *     is exactly the base these routes want.
+         *
+         * The leading slash is stripped and the result resolved
+         * *document-relative*, mirroring the platform's own
+         * `remoteStreamUrl()` in `@deepseek-ai/dsh-api-gateway/lib/client.js`:
+         *
+         *     new URL(PATH.slice(1), __DSH_TRANSPORT__?.streamBaseUrl
+         *                              ?? document.baseURI)
+         *
+         * Note the inverted preference, and do not copy the platform's order. That
+         * one loads a **WebSocket** mux (`url.protocol = 'wss:'`), and `ws:` is not
+         * subject to CORS; the shell even rewrites the cookie and origin for it in
+         * a dedicated `ws://127.0.0.1/*` rule. A cross-origin HTTP request has
+         * neither that rule nor any `access-control-allow-origin` on the Host, so
+         * aiming one at `streamBaseUrl` fails with "Failed to fetch". `streamBaseUrl`
+         * is therefore only a last resort here, for a page that has no usable base
+         * of its own.
+         *
+         * @param pathname - route path, with or without a leading slash.
+         * @returns an absolute URL string.
+         */
+        function hostUrl(pathname) {
+            const rel = String(pathname == null ? '' : pathname).replace(/^\/+/, '')
+            const documentBase = typeof document === 'undefined' ? '' : (document.baseURI || '')
+            const transport = typeof globalThis === 'undefined' ? null : globalThis.__DSH_TRANSPORT__
+            const base = documentBase || (transport && transport.streamBaseUrl) || rel
+            try { return new URL(rel, base).href } catch (err) { return rel }
+        }
+
         // =====================================================================
         // stylesheet
         // =====================================================================
@@ -74,11 +119,27 @@ window.__ModuleLoader__.load({
         // and change on every host build.
         const CSS = `
 /* ---------------------------------------------------------------- tokens */
+/* The four insets are DELIBERATELY left unspecified here, and the values are
+   written as inline properties by syncSafeArea() instead.
+   "var(--pocket-safe-t, env(safe-area-inset-top, 0px))" is invalid CSS — a
+   var() fallback may not contain an env() — so it cannot serve as the static
+   default. Leaving them unset is also the correct *behavioural* default: if the
+   reconciler never runs, the plugin adds no padding at all rather than padding
+   the layout by an inset it has not yet measured.
+
+   Why measurement is needed at all: env(safe-area-inset-top) reports the same
+   number in two very different situations.
+     (a) the document really is under the status bar / notch  -> pad, or the
+         first row of the sidebar disappears under the clock;
+     (b) the shell already starts *below* the system chrome (an in-app WebView
+         with a native title bar, a browser tab under its URL bar) -> padding by
+         the inset carves out a blank strip that belongs to nobody. This is the
+         "phantom title bar" bug: the page dutifully reserves 45px for chrome
+         that is not over it.
+   syncSafeArea() tells the two apart by measuring the frame against the
+   visual viewport, which is a fact about this device rather than an assumption
+   about the environment. */
 html[data-pocket="on"] {
-  --pocket-safe-t: env(safe-area-inset-top, 0px);
-  --pocket-safe-b: env(safe-area-inset-bottom, 0px);
-  --pocket-safe-l: env(safe-area-inset-left, 0px);
-  --pocket-safe-r: env(safe-area-inset-right, 0px);
   --pocket-drawer-w: min(84vw, 320px);
   --pocket-fab: 28px;
   --pocket-fab-gap: 10px;
@@ -459,9 +520,30 @@ html[data-pocket="on"] .pocket-backdrop {
                 if (raw === null) return null
                 const v = String(raw).toLowerCase()
                 if (v === '' || v === '1' || v === 'on' || v === 'mobile') return 'on'
+                if (v === 'probe' || v === 'diag' || v === 'debug') return 'probe'
                 if (v === '0' || v === 'off' || v === 'desktop') return 'off'
             } catch (err) { /* no URL API */ }
             return null
+        }
+
+        // =====================================================================
+        // diagnostics probe
+        // =====================================================================
+        //
+        // `?pocket=probe` loads lib/probe-src.js from the host half and runs it.
+        // This exists because the two defects this plugin is most likely to have
+        // are invisible from a desktop browser: a misreported `env()` inset and a
+        // host landmark that moved. Both are questions about the DOM *on the
+        // device*, and an in-app WebView offers no console to ask them in.
+        //
+        // The probe is fetched rather than bundled so it stays real, lintable
+        // source — see lib/probe-src.js and the note on the host route. Its two
+        // entry points live inside apply(), because what they report (the live
+        // gate decision and the last inset measurement) only exists there.
+
+        /** Mode gate. `probe` keeps the ordinary gate decision and only adds the overlay. */
+        function probeMode() {
+            return forcedMode() === 'probe'
         }
 
         /**
@@ -500,6 +582,135 @@ html[data-pocket="on"] .pocket-backdrop {
             if (/viewport-fit\s*=\s*cover/i.test(current)) return
             const base = current.trim() || 'width=device-width, initial-scale=1'
             meta.setAttribute('content', base.replace(/\s*,\s*$/, '') + ', viewport-fit=cover')
+        }
+
+        // =====================================================================
+        // safe-area measurement
+        // =====================================================================
+        //
+        // `env(safe-area-inset-top, 0px)` is probed once per pass through a
+        // throwaway element. Reading the raw custom property is not enough:
+        // `getPropertyValue('--pocket-safe-t')` returns the *specified* token
+        // stream, which is exactly the string "env(safe-area-inset-top, 0px)"
+        // rather than a length. Inheriting it into a real element and reading a
+        // resolved length property is what forces the substitution.
+
+        /** Resolve one `env(safe-area-inset-<side>)` to a number of px. */
+        function probeInset(side) {
+            const prop = 'padding' + side.charAt(0).toUpperCase() + side.slice(1)
+            try {
+                const el = document.createElement('div')
+                el.setAttribute('data-pocket-inset-probe', '')
+                // Out of flow and zero-sized: this must never be able to affect
+                // layout, even for the one frame it exists.
+                el.style.cssText = 'position:absolute;left:-9999px;top:0;width:0;height:0;pointer-events:none'
+                el.style[prop] = 'env(safe-area-inset-' + side + ', 0px)'
+                document.documentElement.appendChild(el)
+                const value = parseFloat(window.getComputedStyle(el)[prop]) || 0
+                el.remove()
+                return value
+            } catch (err) {
+                return 0
+            }
+        }
+
+        /**
+         * Publish `--pocket-safe-*`, so the plugin only ever reserves space the
+         * document actually occupies.
+         *
+         * The problem this solves, stated plainly: `env(safe-area-inset-top)` is
+         * not a statement about *this document*. It is a statement about the
+         * display, and a WebView that already starts below the system chrome still
+         * reports it. Padding the layout by it in that case carves out a blank
+         * strip that belongs to nobody — a "phantom title bar". Measured on the
+         * device this plugin was reported broken on, the strip is ~45px, which is
+         * exactly the status-bar height the WebView no longer covers.
+         *
+         * Two independent gates, because either alone can be wrong:
+         *
+         *   1. GEOMETRY. If the shell's top edge already sits below the viewport's,
+         *      something consumed the inset before us; padding again double-counts.
+         *      This catches a browser tab under its URL bar and any wrapper that
+         *      lays the app out below native chrome.
+         *   2. ENVIRONMENT. `display-mode: browser` means the page is not being
+         *      presented as a standalone/fullscreen app, i.e. it cannot be
+         *      underlapping system bars. An in-app WebView reports this too — and
+         *      it is exactly the case where the inset is a lie. A standalone PWA or
+         *      a fullscreen/immersive view reports standalone/fullscreen and keeps
+         *      its inset.
+         *
+         * The bottom inset is clamped from the other direction: a layout taller
+         * than the room left over cannot absorb it, and adding it produces the
+         * phantom outer scroll (the classic "composer pushed below the fold").
+         *
+         * Every decision is reported in the returned record, and the settings
+         * probe prints it verbatim. A silent policy here is indistinguishable from
+         * a plugin that is ignoring the device.
+         */
+        function syncSafeArea() {
+            const root = document.documentElement
+            const insetTop = probeInset('top')
+            const insetBottom = probeInset('bottom')
+            const insetLeft = probeInset('left')
+            const insetRight = probeInset('right')
+
+            const frame = findFrame()
+            const rect = frame ? frame.getBoundingClientRect() : null
+            const frameTop = rect ? rect.top : 0
+            const frameHeight = rect ? rect.height : 0
+            const viewport = (window.visualViewport && window.visualViewport.height) || window.innerHeight
+
+            // `> 2` rather than `> 0`: a browser may report the frame edge a
+            // sub-pixel below zero, and misreading that would silently drop a real
+            // inset. A genuine offset is tens of px.
+            const pushedDown = frameTop > 2
+
+            const mode = (() => {
+                try {
+                    if (window.matchMedia('(display-mode: standalone)').matches) return 'standalone'
+                    if (window.matchMedia('(display-mode: fullscreen)').matches) return 'fullscreen'
+                    if (window.matchMedia('(display-mode: minimal-ui)').matches) return 'minimal-ui'
+                    return 'browser'
+                } catch (err) { return 'unknown' }
+            })()
+            // An unknown mode is treated as immersive: the conservative choice is to
+            // keep an inset the device asked for rather than drop it and put content
+            // under a notch.
+            const immersive = mode === 'standalone' || mode === 'fullscreen' || mode === 'minimal-ui' || mode === 'unknown'
+            const implausible = insetTop > 64
+
+            let topPolicy
+            if (pushedDown) topPolicy = 'shell-below-device-chrome'
+            else if (!immersive) topPolicy = 'not-an-immersive-display'
+            else if (implausible) topPolicy = 'implausible-inset'
+            else topPolicy = 'applied'
+            const top = topPolicy === 'applied' ? insetTop : 0
+
+            const room = viewport - frameHeight
+            const bottom = room >= insetBottom ? insetBottom : 0
+
+            const px = (n) => Math.round(n) + 'px'
+            root.style.setProperty('--pocket-safe-t', px(top))
+            root.style.setProperty('--pocket-safe-b', px(bottom))
+            root.style.setProperty('--pocket-safe-l', px(insetLeft))
+            root.style.setProperty('--pocket-safe-r', px(insetRight))
+            // The raw device values are published too, so "the plugin decided not to
+            // pad" stays distinguishable from "the device reported no inset".
+            root.style.setProperty('--pocket-inset-raw-t', px(insetTop))
+
+            return {
+                insetTop, insetBottom, insetLeft, insetRight,
+                top, bottom, left: insetLeft, right: insetRight,
+                pushedDown, frameTop, displayMode: mode, topPolicy,
+            }
+        }
+
+        function clearSafeArea() {
+            const root = document.documentElement
+            for (const name of ['--pocket-safe-t', '--pocket-safe-b', '--pocket-safe-l',
+                '--pocket-safe-r', '--pocket-inset-raw-t']) {
+                root.style.removeProperty(name)
+            }
         }
 
         // =====================================================================
@@ -661,46 +872,134 @@ html[data-pocket="on"] .pocket-backdrop {
          * Status + update row contributed to `settings.general.item`. The version
          * shown here is the same value the host half reads out of package.json,
          * so the two can never drift.
+         *
+         * The row is rendered by the host while the plugin tree may still be
+         * starting, and the host half's routes only exist once `webServer` is
+         * ready — the two are NOT synchronised. One un-retried fetch therefore
+         * had a real failure mode: if the request landed early, `/pocket/meta`
+         * 404'd, the promise was swallowed ("offline: silent"), and the row said
+         * "host 半区未就绪 · 未检测更新" for the rest of the page's life even
+         * though the host half had come up a moment later. On a phone, where the
+         * page may stay open for days, that is permanent.
+         *
+         * So: retry with backoff, then keep a slow keep-alive instead of giving
+         * up for good — a fast window is right for "still booting", but it is the
+         * wrong shape for a page that outlives a host restart.
+         *
+         * Note the paths below go through {@link hostUrl}: a root-absolute path
+         * ignores a path-prefixed mount point (and, in the desktop shell, the
+         * `dsh-app://app/` base its protocol handler routes the Host from), and
+         * getting that wrong looks exactly like a dead host.
          */
+        const META_RETRY_MS = [400, 1200, 3000, 8000]
+        /** After the fast window: re-check slowly rather than never. */
+        const META_KEEPALIVE_MS = 15000
+
         function PocketSettingsRow() {
             const [meta, setMeta] = React.useState(null)
+            // 'pending' while the fast retry window is open, 'down' after it,
+            // 'ready' once /pocket/meta has answered.
+            const [link, setLink] = React.useState('pending')
             const [busy, setBusy] = React.useState(false)
+            /** Why the last request failed, printed in the row: a silent row and a
+             *  dead host are indistinguishable without it. */
+            const [failure, setFailure] = React.useState('')
             const [active, setActive] = React.useState(activeStore.get())
 
             React.useEffect(() => activeStore.subscribe(setActive), [])
 
             React.useEffect(() => {
                 let cancelled = false
-                fetch('/pocket/meta', { headers: { accept: 'application/json' } })
-                    .then((r) => (r.ok ? r.json() : null))
-                    .then((doc) => { if (!cancelled && doc) setMeta(doc) })
-                    .catch(() => { /* host half unavailable: stay quiet */ })
-                return () => { cancelled = true }
+                let timer = null
+                let attempt = 0
+
+                const schedule = (ms) => { timer = window.setTimeout(load, ms) }
+
+                const load = () => {
+                    const url = hostUrl('/pocket/meta')
+                    fetch(url, { headers: { accept: 'application/json' } })
+                        .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+                        .then((doc) => {
+                            if (cancelled) return
+                            if (doc && doc.version) {
+                                setMeta(doc); setLink('ready'); setFailure(''); attempt = 0
+                                return // connected: no further retries
+                            }
+                            throw new Error('host half reported no version')
+                        })
+                        .catch((err) => {
+                            if (cancelled) return
+                            const reason = String((err && err.message) || err)
+                            if (attempt >= META_RETRY_MS.length) {
+                                // Exhausted the fast window. Stay 'down' — and keep
+                                // poking, because the host can come back without the
+                                // page ever being reloaded.
+                                setFailure('无法连接 ' + url + '（' + reason + '）')
+                                setLink('down')
+                                schedule(META_KEEPALIVE_MS)
+                                return
+                            }
+                            // A 404 while the host is still starting is the expected
+                            // case, not something to report.
+                            schedule(META_RETRY_MS[attempt])
+                            attempt += 1
+                        })
+                }
+
+                load()
+                return () => {
+                    cancelled = true
+                    if (timer !== null) window.clearTimeout(timer)
+                }
             }, [])
 
             const post = (path) => {
+                const url = hostUrl(path)
                 setBusy(true)
-                fetch(path, { method: 'POST', headers: { accept: 'application/json' } })
-                    .then((r) => (r.ok ? r.json() : null))
-                    .then((doc) => { if (doc) setMeta(doc) })
-                    .catch(() => { /* offline: silent */ })
+                setFailure('')
+                fetch(url, { method: 'POST', headers: { accept: 'application/json' } })
+                    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+                    .then((doc) => { if (doc) { setMeta(doc); setLink('ready') } })
+                    .catch((err) => {
+                        // A button that does nothing on failure is worse than an
+                        // error: the user presses again, and again. Say what failed
+                        // and against which URL — that is the whole diagnosis for a
+                        // host the page cannot reach.
+                        setFailure('无法连接 ' + url + '（' + String((err && err.message) || err) + '）')
+                    })
                     .finally(() => setBusy(false))
             }
 
-            const version = meta && meta.version ? 'v' + meta.version : 'host 半区未就绪'
+            let version
+            if (meta && meta.version) version = 'v' + meta.version
+            else if (link === 'pending') version = '正在连接 host 半区…'
+            else version = 'host 半区无响应'
+
             const upgrade = (meta && meta.upgrade) || {}
             const updateAvailable = !!(meta && meta.updateAvailable)
+            // A link:/file:/tarball install is a source checkout: the host half
+            // refuses to replace it with a published copy, so the row must not
+            // advertise an upgrade it will decline.
+            const localInstall = !!(meta && meta.localInstall)
 
             // Say the state, not two version numbers that are usually identical.
+            // "未检测更新" was itself misleading: it is what the row says when the
+            // registry lookup has not answered, which is not a statement about
+            // whether an update exists. The host half now reports why.
             let latestText
-            if (updateAvailable) latestText = '可升级到 v' + meta.latest
+            if (localInstall) {
+                latestText = updateAvailable ? '本地安装（不参与在线升级）' : '本地安装 · 已是最新'
+            } else if (updateAvailable) latestText = '可升级到 v' + meta.latest
             else if (meta && meta.latest) latestText = '已是最新'
-            else latestText = '未检测更新'
+            else if (link !== 'ready') latestText = ''
+            else if (meta.updateDisabled) latestText = '已关闭更新检查'
+            else if (meta.updateChecked) latestText = '无法访问 npm registry（离线？）'
+            else latestText = '正在检查更新…'
 
             let action
             if (busy || upgrade.running) {
                 action = React.createElement('button', { type: 'button', disabled: true }, '处理中…')
-            } else if (updateAvailable) {
+            } else if (updateAvailable && !localInstall) {
                 action = React.createElement('button', { type: 'button', onClick: () => post('/pocket/upgrade') },
                     '升级到 v' + meta.latest)
             } else {
@@ -712,8 +1011,18 @@ html[data-pocket="on"] .pocket-backdrop {
                 active ? '移动端布局生效中' : '桌面端（未启用）',
                 version,
                 latestText,
-            ]
+            ].filter(Boolean)
             if (upgrade.message) hint.push(upgrade.message)
+            if (failure) hint.push(failure)
+            // "host 半区无响应" is almost always the same story, and it is not a
+            // plugin defect: a freshly *installed or updated* plugin has its
+            // client half served from disk immediately, while the host half only
+            // exists in the Node process that imported it. There is no unload
+            // path, so the host half of a new install is simply absent until the
+            // server restarts — which is precisely the state this row is
+            // describing. Say the remedy instead of leaving "did nothing" as the
+            // user's only evidence that the update button works.
+            if (link === 'down') hint.push('刚安装或更新过？重启 dsh web 后生效')
 
             return React.createElement('div', { className: 'pocket-row' },
                 React.createElement('div', { className: 'pocket-row-text' },
@@ -757,11 +1066,80 @@ html[data-pocket="on"] .pocket-backdrop {
             let pollTimer = null
             let mediaList = null
             let keyHandler = null
+            /** Last {@link syncSafeArea} result, shared with the diagnostics probe. */
+            let lastInsets = null
+            /** The probe is fetched once per page; re-runs push fresh data into it. */
+            let probeInstalled = false
+
+            /**
+             * The host half is the single source of truth for the version (it reads
+             * package.json). Fetched only in probe mode, so the ordinary page load
+             * gains no request, and the version is a diagnostic nicety here.
+             */
+            let probeVersion = ''
+
+            /** Everything the probe needs to explain the gate without re-deriving it. */
+            function probeBoot(reason) {
+                return {
+                    version: probeVersion,
+                    mobileQuery: MOBILE_QUERY,
+                    active: activeStore.get(),
+                    rival: rivalPresent(),
+                    forced: forcedMode(),
+                    reason,
+                    insets: lastInsets,
+                }
+            }
+
+            function installProbe(reason) {
+                const boot = probeBoot(reason)
+                if (probeInstalled) {
+                    // Already on the page. Hand over the fresh pass but do NOT
+                    // re-render: this runs inside a reconcile pass, the overlay is a
+                    // DOM mutation, and the reconciler observes DOM mutations — so
+                    // re-rendering from here is a feedback loop, not a refresh. The
+                    // probe's own 重新检测 button re-measures on demand instead.
+                    try { window.__pocket.boot = boot } catch (err) { /* non-fatal */ }
+                    return
+                }
+                probeInstalled = true
+                // Published BEFORE the script runs: the probe reads its payload from
+                // this global at load time, so assigning it afterwards would make the
+                // very first report describe the previous pass.
+                window.__pocket = Object.assign({}, window.__pocket, { boot })
+                fetch(hostUrl('/pocket/hello'), { headers: { accept: 'application/json' } })
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((doc) => {
+                        if (!doc || !doc.version) return
+                        probeVersion = String(doc.version)
+                        // Safe to re-render here: this resolves from a fetch, outside
+                        // the reconcile pass, and the version is worth showing.
+                        window.__pocket.boot = probeBoot(reason)
+                        const overlay = document.querySelector('[data-pocket-probe-ui]')
+                        if (overlay) overlay.remove()
+                        if (window.__pocket.show) window.__pocket.show()
+                    })
+                    .catch(() => { /* diagnostics only: a missing version is not an error */ })
+                fetch(hostUrl('/pocket/probe.js'), { headers: { accept: 'text/javascript' } })
+                    .then((r) => (r.ok ? r.text() : Promise.reject(new Error('http ' + r.status))))
+                    .then((code) => {
+                        // eslint-disable-next-line no-new-func
+                        new Function(code)()
+                    })
+                    .catch((err) => {
+                        probeInstalled = false
+                        console.warn('[' + name + '] 探针加载失败（host 半区未就绪时需重启 dsh web）：', err)
+                    })
+            }
 
             function activate() {
                 if (active) return
                 active = true
                 document.documentElement.setAttribute('data-pocket', 'on')
+                // Measure before the first paint that uses the tokens: every rule
+                // reads --pocket-safe-*, and at this instant they are still unset,
+                // so without this the drawer renders one frame with no top padding.
+                lastInsets = syncSafeArea()
                 activeStore.set(true)
             }
 
@@ -773,6 +1151,8 @@ html[data-pocket="on"] .pocket-backdrop {
                 drawerStore.set(false)
                 awaitingExpand = false
                 untagLandmarks()
+                clearSafeArea()
+                lastInsets = null
                 activeStore.set(false)
             }
 
@@ -780,11 +1160,16 @@ html[data-pocket="on"] .pocket-backdrop {
              * Decide whether mobile mode should be on, and apply the difference.
              * Runs on every reconcile pass, so a rival plugin that injects its
              * stylesheet after us is still detected.
+             *
+             * The returned string is the *reason*, kept next to the decision rather
+             * than reconstructed later: the probe reports it verbatim, and a gate
+             * that closes without saying why is the hardest kind of bug to see from
+             * a phone.
              */
             function evaluate() {
                 const forced = forcedMode()
-                if (forced === 'off') { deactivate(); return }
-                const want = forced === 'on' ? true : mediaMatches()
+                if (forced === 'off') { deactivate(); return 'forced off by ?pocket=off' }
+                const want = forced === 'on' || forced === 'probe' ? true : mediaMatches()
                 if (want && rivalPresent()) {
                     deactivate()
                     if (!warnedRival) {
@@ -792,18 +1177,30 @@ html[data-pocket="on"] .pocket-backdrop {
                         console.warn('[' + name + '] 检测到 ' + RIVAL_PLUGIN + ' 已启用，dsh-pocket-ui 自动让位'
                             + '（两套移动端布局会互相干扰）。移除其中一个即可。')
                     }
-                    return
+                    return 'stood down: ' + RIVAL_PLUGIN + ' is present'
                 }
-                if (want) activate()
-                else deactivate()
+                if (want) { activate(); return forced ? 'forced on by ?pocket=' + forced : 'media query matched' }
+                deactivate()
+                return 'media query did not match (' + MOBILE_QUERY + ')'
             }
 
             function reconcile() {
-                evaluate()
-                if (!active) return
+                const reason = evaluate()
+                if (!active) {
+                    // Probing an inactive gate is the point: it is how "the plugin
+                    // decided not to run" is told apart from "the plugin ran and the
+                    // layout is still wrong".
+                    if (probeMode()) installProbe(reason)
+                    return
+                }
                 tagLandmarks()
                 ensureViewportMeta()
+                // Re-measured every pass, not once at activation: the numbers depend
+                // on the frame's live geometry, which the host rewrites on resize,
+                // on entering fullscreen, and whenever the drawer asks it to expand.
+                lastInsets = syncSafeArea()
                 syncDrawerWithHost()
+                if (probeMode()) installProbe(reason)
             }
 
             function schedule() {
@@ -902,7 +1299,7 @@ html[data-pocket="on"] .pocket-backdrop {
         }
 
         // Test hooks: the smoke test drives these without a DOM.
-        exports.__internal = { MOBILE_QUERY, CSS, createStore }
+        exports.__internal = { MOBILE_QUERY, CSS, createStore, hostUrl }
 
         exports.name = name
         exports.inject = inject

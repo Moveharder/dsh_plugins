@@ -57,6 +57,9 @@ async function makeProfile({ dependencySpec }) {
   const installed = path.join(root, 'node_modules', PKG)
   await fsp.mkdir(path.join(installed, 'lib'), { recursive: true })
   await fsp.copyFile(path.join(pkgRoot, 'lib', 'index.js'), path.join(installed, 'lib', 'index.js'))
+  // The host half serves the probe from disk, so a fixture without it is not a
+  // faithful copy of an install.
+  await fsp.copyFile(path.join(pkgRoot, 'lib', 'probe-src.js'), path.join(installed, 'lib', 'probe-src.js'))
   await fsp.copyFile(path.join(pkgRoot, 'package.json'), path.join(installed, 'package.json'))
   await fsp.writeFile(path.join(root, 'package.json'), JSON.stringify({
     name: 'dsh-profile-web',
@@ -113,8 +116,8 @@ function unload(ctx) {
   for (const dispose of ctx.disposers.splice(0)) dispose()
 }
 
-/** Minimal req/res pair. */
-function callRoute(route, pathname, method = 'GET') {
+/** Minimal req/res pair. `raw: true` keeps the body as text (the probe script). */
+function callRoute(route, pathname, method = 'GET', { raw = false } = {}) {
   return new Promise((resolve, reject) => {
     const chunks = []
     const res = {
@@ -123,7 +126,9 @@ function callRoute(route, pathname, method = 'GET') {
       writeHead(code, headers) { this.statusCode = code; this.headers = headers },
       end(body) {
         chunks.push(body)
-        try { resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(chunks.join('')) }) } catch (err) { reject(err) }
+        const text = chunks.join('')
+        if (raw) { resolve({ status: res.statusCode, headers: res.headers, text }); return }
+        try { resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(text) }) } catch (err) { reject(err) }
       },
     }
     Promise.resolve(route.handler({ url: pathname, method }, res)).catch(reject)
@@ -263,6 +268,34 @@ try {
     assert.equal(res.body.updateChecked, true)
   })
 
+  await check('GET /pocket/probe.js serves the probe as JavaScript', async () => {
+    const res = await callRoute(ctx.routes[0], '/pocket/probe.js', 'GET', { raw: true })
+    assert.equal(res.status, 200)
+    assert.match(res.headers['content-type'], /text\/javascript/)
+    assert.match(res.headers['cache-control'], /no-store/,
+      'a cached probe describes a build that no longer exists')
+    // The served bytes must be the probe's real source, not a stub: it is the
+    // only artefact that can explain a device's geometry.
+    const onDisk = fs.readFileSync(path.join(pkgRoot, 'lib', 'probe-src.js'), 'utf8')
+    assert.equal(res.text, onDisk, 'the route must serve lib/probe-src.js verbatim')
+    assert.match(res.text, /safe-area-inset-top/, 'and it must contain the inset probe')
+  })
+
+  await check('a missing probe source fails loudly rather than 404-ing', async () => {
+    // The probe is a file, so it can be missing from an install that predates it
+    // or from a package that forgot to ship it. "404 not found" would send the
+    // reader looking for a routing bug; naming the expected path does not.
+    const broken = await makeProfile({ dependencySpec: '^0.0.1' })
+    await fsp.rm(path.join(broken.root, 'node_modules', PKG, 'lib', 'probe-src.js'), { force: true })
+    const mod = await loadHostHalf(broken.entry)
+    const c = makeCtx()
+    mod.apply(c)
+    const res = await callRoute(c.routes[0], '/pocket/probe.js')
+    assert.equal(res.status, 500)
+    assert.match(res.body.expectedAt, /probe-src\.js$/)
+    unload(c)
+  })
+
   await check('unknown routes 404 with a route index', async () => {
     const res = await callRoute(ctx.routes[0], '/pocket/nope')
     assert.equal(res.status, 404)
@@ -314,6 +347,52 @@ try {
     assert.equal(res.body.upgrade.ok, 'local')
   })
 
+  await check('a link install living OUTSIDE the profile is still recognised', async () => {
+    // The fixture above copies the plugin *inside* `node_modules`, so the walk up
+    // from `import.meta.url` reaches the profile and the guard looks healthy.
+    // A real `link:` install does not: Node resolves this module to the source
+    // checkout, the walk starts outside the profile, finds nothing and returns
+    // null — which silently turned `localInstall` into null and removed the guard
+    // that refuses to overwrite a checkout with a published copy.
+    const home = await tmpdir('pocket-home-')
+    const checkout = await tmpdir('pocket-checkout-')
+    await fsp.cp(path.join(pkgRoot, 'lib'), path.join(checkout, 'lib'), { recursive: true })
+    await fsp.copyFile(path.join(pkgRoot, 'package.json'), path.join(checkout, 'package.json'))
+
+    const profile = path.join(home, 'profiles', 'web')
+    await fsp.mkdir(path.join(profile, 'node_modules'), { recursive: true })
+    await fsp.writeFile(path.join(profile, 'package.json'), JSON.stringify({
+      name: 'dsh-profile-web',
+      private: true,
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', PKG] } },
+      dependencies: { [PKG]: 'link:' + checkout },
+    }, null, 2))
+    await fsp.symlink(checkout, path.join(profile, 'node_modules', PKG), 'dir')
+
+    const prevHome = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    try {
+      const m = await loadHostHalf(path.join(checkout, 'lib', 'index.js'))
+      const c = makeCtx()
+      m.apply(c)
+      await new Promise((r) => setTimeout(r, 150))
+
+      const meta = await callRoute(c.routes[0], '/pocket/meta')
+      assert.equal(path.basename(String(meta.body.profileRoot)), 'web',
+        'the profile that owns the link must be found, got: ' + meta.body.profileRoot)
+      assert.match(String(meta.body.localInstall), /^link:/,
+        'and it must be reported as a local install')
+
+      const res = await callRoute(c.routes[0], '/pocket/upgrade', 'POST')
+      assert.equal(res.body.upgrade.ok, 'local',
+        'the local-install guard must hold for a checkout outside the profile')
+      unload(c)
+    } finally {
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+    }
+  })
+
   // -- registry install upgrades -------------------------------------------
   await check('a registry install upgrades via the injected package manager', async () => {
     const pm = await makeFakePkgManager()
@@ -346,9 +425,20 @@ try {
     const ctx5 = makeCtx()
     mod5.apply(ctx5)
 
+    // Force the check rather than reading whatever the startup pass happened to
+    // have reached: `updateError` is only written once a pass finishes.
+    await callRoute(ctx5.routes[0], '/pocket/check-update', 'POST')
+
     const meta = await callRoute(ctx5.routes[0], '/pocket/meta')
     assert.equal(meta.body.latest, null)
     assert.equal(meta.body.updateAvailable, false)
+    // "No update" and "the check never ran" must not look identical. The settings
+    // row said 未检测更新 for a null `latest` caused by an unreachable registry,
+    // which reads as a statement about updates rather than about the network.
+    assert.ok(meta.body.updateError, 'the failure reason must be reported, not swallowed')
+    assert.match(meta.body.updateError, /127\.0\.0\.1:1/, 'and it must name the registry tried')
+    assert.deepEqual(meta.body.registries, ['http://127.0.0.1:1'],
+      'the override must replace the built-in candidate list, not be appended to it')
 
     const res = await callRoute(ctx5.routes[0], '/pocket/upgrade', 'POST')
     assert.notEqual(res.body.upgrade.ok, 'ok', 'offline must not claim success')

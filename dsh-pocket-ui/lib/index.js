@@ -21,11 +21,15 @@
  *   DSH_POCKET_NO_UPDATE_CHECK=1   disable registry lookups entirely
  *   DSH_POCKET_REGISTRY=<url>      alternate registry base (mirror / test)
  *   DSH_POCKET_PKG_MANAGER=<bin>   alternate package manager binary
+ *   DSH_POCKET_PROFILE_ROOT=<dir>  the profile this copy is installed into, when
+ *                                  it cannot be discovered by walking (tests,
+ *                                  and link:/file: installs in an unusual home)
  */
 
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import os from 'node:os'
 import fs from 'node:fs'
 import http from 'node:http'
 import https from 'node:https'
@@ -50,9 +54,11 @@ function apply(ctx) {
   // ---- Version: read from this package's own package.json (never hard-coded) ----
   const here = fileURLToPath(import.meta.url)
   const req = createRequire(import.meta.url)
+  /** This package's own directory — the one holding package.json. */
+  const PACKAGE_ROOT = path.join(path.dirname(here), '..')
   let VERSION = ''
   try {
-    VERSION = String((req(path.join(path.dirname(here), '..', 'package.json')) || {}).version || '')
+    VERSION = String((req(path.join(PACKAGE_ROOT, 'package.json')) || {}).version || '')
   } catch (err) { /* ignore: version falls back to empty string */ }
 
   // ================= version & online upgrade =================
@@ -98,33 +104,66 @@ function apply(ctx) {
   }
 
   // Read process.env at call time (not module scope) so tests can inject.
-  const REGISTRY = () => String(process.env.DSH_POCKET_REGISTRY || 'https://registry.npmjs.org').replace(/\/+$/, '')
+  // The registry list itself lives in registryCandidates() above.
   const UPDATE_CHECK_DISABLED = () => !!process.env.DSH_POCKET_NO_UPDATE_CHECK
 
   let latestVersion = null
   let updateChecked = false
   let checkInFlight = null
+  /** Why the last registry lookup produced nothing; surfaced instead of a silent null. */
+  let updateError = ''
+
+  /**
+   * Registry candidates, tried in order until one answers.
+   *
+   * A single hard-coded `registry.npmjs.org` was a real defect on the machine
+   * this plugin runs on: a NAS behind a mainland-China uplink frequently cannot
+   * reach npmjs at all, so the lookup timed out, `latestVersion` stayed null, and
+   * the settings row said "未检测更新" — which reads like "there is no update"
+   * rather than "the check never completed". A mirror is the difference between
+   * the feature working and looking broken.
+   */
+  function registryCandidates() {
+    const override = String(process.env.DSH_POCKET_REGISTRY || '').trim()
+    if (override) return [override.replace(/\/+$/, '')]
+    return [
+      'https://registry.npmjs.org',
+      'https://registry.npmmirror.com',
+    ]
+  }
 
   /** Look up the latest published version; de-duplicated and offline-silent. */
   function checkUpdate() {
     if (UPDATE_CHECK_DISABLED()) {
       updateChecked = true
       latestVersion = null
+      updateError = 'disabled'
       return Promise.resolve(null)
     }
     if (checkInFlight) return checkInFlight
     checkInFlight = (async () => {
-      try {
-        const doc = await httpsGetJson(REGISTRY() + '/' + name + '/latest')
-        latestVersion = doc && typeof doc === 'object' ? String(doc.version || '') : ''
-        if (!latestVersion) latestVersion = null
-      } catch (err) {
-        // Offline / unpublished / timeout: degrade silently, never surface.
-        latestVersion = null
-      } finally {
-        updateChecked = true
+      const failures = []
+      updateError = ''
+      for (const base of registryCandidates()) {
+        try {
+          const doc = await httpsGetJson(base + '/' + name + '/latest')
+          const version = doc && typeof doc === 'object' ? String(doc.version || '') : ''
+          if (version) {
+            latestVersion = version
+            updateChecked = true
+            return latestVersion
+          }
+          failures.push(base + ': no version field')
+        } catch (err) {
+          failures.push(base + ': ' + String((err && err.message) || err))
+        }
       }
-      return latestVersion
+      // Every candidate failed. Record why rather than degrading to an
+      // indistinguishable null, so the UI can say "the check did not run".
+      latestVersion = null
+      updateError = failures.join('; ').slice(0, 400) || 'no registry candidates'
+      updateChecked = true
+      return null
     })().finally(() => { checkInFlight = null })
     return checkInFlight
   }
@@ -135,18 +174,70 @@ function apply(ctx) {
    * this package's own manifest declares only dsh.client/dsh.bundle, so it can
    * never match itself.
    */
+  function readProfileManifest(dir) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
+      return pkg && pkg.dsh && pkg.dsh.profile ? pkg : null
+    } catch (err) {
+      return null
+    }
+  }
+
+  function realpathOrNull(target) {
+    try { return fs.realpathSync(target) } catch (err) { return null }
+  }
+
+  /**
+   * Locate the profile this copy is installed into.
+   *
+   * Three strategies, in order, because "walk up from `import.meta.url`" is only
+   * correct for one of the two ways a plugin can be installed:
+   *
+   *   1. an explicit override, for layouts nothing else can describe;
+   *   2. the upward walk — right whenever the module really lives inside the
+   *      profile (a registry install);
+   *   3. the profile scan — required for `link:`/`file:`/`workspace:` installs,
+   *      where Node resolves this module to the *source checkout*. The walk then
+   *      starts outside the profile, finds nothing, and returns null — which
+   *      silently disables `localInstall` and with it the guard that refuses to
+   *      replace a checkout with a published copy (see runUpgrade).
+   */
   function findProfileRoot() {
+    const override = String(process.env.DSH_POCKET_PROFILE_ROOT || '').trim()
+    if (override && readProfileManifest(override)) return override
+
     let dir = path.dirname(here)
     for (let i = 0; i < 8; i++) {
-      try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
-        if (pkg && pkg.dsh && pkg.dsh.profile) return dir
-      } catch (err) { /* no package.json here, keep walking */ }
+      if (readProfileManifest(dir)) return dir
       const parent = path.dirname(dir)
       if (parent === dir) break
       dir = parent
     }
-    return null
+
+    const home = String(process.env.DSH_HOME || '').trim() || path.join(os.homedir(), '.dsh')
+    const profilesDir = path.join(home, 'profiles')
+    let profileNames = []
+    try {
+      profileNames = fs.readdirSync(profilesDir)
+    } catch (err) {
+      return null
+    }
+
+    // Identity first: a profile whose `node_modules/<name>` really is this
+    // package. That is exact, and it survives several profiles installing us.
+    const self = realpathOrNull(PACKAGE_ROOT)
+    const declared = []
+    for (const profileName of profileNames) {
+      const root = path.join(profilesDir, profileName)
+      const pkg = readProfileManifest(root)
+      if (!pkg) continue
+      const linked = realpathOrNull(path.join(root, 'node_modules', name))
+      if (self !== null && linked === self) return root
+      if (pkg.dependencies && pkg.dependencies[name]) declared.push(root)
+    }
+    // Otherwise only a profile that declares a dependency on us can be it. More
+    // than one and the answer would be a guess, so decline rather than guess.
+    return declared.length === 1 ? declared[0] : null
   }
 
   /**
@@ -257,7 +348,19 @@ function apply(ctx) {
       updateAvailable: !!(latestVersion && VERSION && semverGt(latestVersion, VERSION)),
       upgrade: { running: upgrade.running, ok: upgrade.ok, message: upgrade.message },
       localInstall: profileRoot ? localInstallOf(profileRoot) : null,
+      /**
+       * Where the host half believes it is installed. Published because "the
+       * upgrade path declined / declined nothing" is only diagnosable together
+       * with the root it looked at — and because a `link:` install is exactly the
+       * case where that root used to be found as null.
+       */
+      profileRoot: profileRoot || null,
       updateDisabled: UPDATE_CHECK_DISABLED(),
+      // An empty `latest` has two very different causes — "the registry says you
+      // are current" and "the registry was never reached" — and the settings row
+      // has to be able to tell them apart.
+      updateError: updateError || '',
+      registries: registryCandidates(),
     }
   }
 
@@ -269,6 +372,42 @@ function apply(ctx) {
     try {
       res.writeHead(code, {
         'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+        'content-length': Buffer.byteLength(body),
+      })
+      res.end(body)
+    } catch (err) { /* connection already closed */ }
+  }
+
+  /**
+   * Serve `lib/probe-src.js` verbatim.
+   *
+   * The geometry probe is real source in its own file (lintable, diffable,
+   * unit-tested by scripts/smoke-probe.js) rather than an escaped string inside
+   * the bundle, and the browser half pulls it from here when the page is opened
+   * with `?pocket=probe`. Serving it beats asking the user to paste a snippet
+   * into a phone: in-app WebViews have no console, and "type this URL" is a
+   * supportable instruction where "open remote debugging" is not.
+   *
+   * Read lazily and cached after the first hit, so a probe request is the only
+   * thing that ever touches the filesystem. `no-store` because a cached probe is
+   * a probe that lies about the build it is describing.
+   */
+  function sendProbeScript(res) {
+    let body = ''
+    try {
+      body = fs.readFileSync(path.join(path.dirname(here), 'probe-src.js'), 'utf8')
+    } catch (err) {
+      sendJson(res, 500, {
+        error: 'probe source is missing from this install',
+        detail: String((err && err.message) || err),
+        expectedAt: path.join(path.dirname(here), 'probe-src.js'),
+      })
+      return
+    }
+    try {
+      res.writeHead(200, {
+        'content-type': 'text/javascript; charset=utf-8',
         'cache-control': 'no-store',
         'content-length': Buffer.byteLength(body),
       })
@@ -300,6 +439,12 @@ function apply(ctx) {
         return
       }
 
+      if (pathname === '/pocket/probe.js') {
+        if (req.method !== 'GET' && req.method !== 'HEAD') { sendJson(res, 405, { error: 'method not allowed' }); return }
+        sendProbeScript(res)
+        return
+      }
+
       if (pathname === '/pocket/check-update') {
         if (req.method !== 'POST') { sendJson(res, 405, { error: 'method not allowed' }); return }
         try { await checkUpdate() } catch (err) { /* offline, silent */ }
@@ -319,7 +464,8 @@ function apply(ctx) {
 
       sendJson(res, 404, {
         error: 'not found',
-        routes: ['/pocket/hello', '/pocket/meta', 'POST /pocket/check-update', 'POST /pocket/upgrade'],
+        routes: ['/pocket/hello', '/pocket/meta', '/pocket/probe.js',
+          'POST /pocket/check-update', 'POST /pocket/upgrade'],
       })
     },
   }), name + ': routes')
@@ -341,7 +487,12 @@ function apply(ctx) {
     return () => { clearInterval(timer) }
   }, name + ': update-check')
 
-  ctx.logger?.info?.(`[${name}] host ready · v${VERSION}`)
+  // Plain console.log, like the other out-of-tree plugins: `ctx.logger` is not
+  // guaranteed to exist, and "did the host half load at all?" has to be
+  // answerable from the server log — that is the first question when the browser
+  // side reports an unreachable host half.
+  console.log('[' + name + '] host half active, version v' + (VERSION || '?') +
+    ', routes under /pocket')
 }
 
 export { name, inject, apply }
