@@ -113,6 +113,17 @@ dsh plugin --profile web add dsh-pocket-ui
 
 装完**重启 `dsh web`** 生效。
 
+> **刚发布 24 小时内安装，会静默装上旧版本**。pnpm 11 起 `minimumReleaseAge` 默认 **1440 分钟**，
+> `add dsh-pocket-ui` 会在满足 semver 的候选里挑「最新的**够老**版本」——**命令是成功的**，装上的却可能是上一个版本。
+> 想立刻用上刚发布的版本，在 profile 的 `pnpm-workspace.yaml` 里放行（按包名即可，不必逐版本写）：
+>
+> ```yaml
+> minimumReleaseAgeExclude:
+>   - dsh-pocket-ui
+> ```
+>
+> 完整来龙去脉见下面 v0.1.7 条目。
+
 本地开发：
 
 ```sh
