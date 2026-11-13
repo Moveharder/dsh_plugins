@@ -205,6 +205,100 @@ async function clickPoint(cdp, session, x, y, expect) {
   await sleep(400)
 }
 
+/**
+ * Open Settings, whatever the host currently calls the entry point.
+ *
+ * Three entry points have existed across versions and none of them is stable:
+ *   - 0.1.x: `[data-slot="settings.trigger"]` opened the dialog directly;
+ *   - 0.2.2: that slot is gone. `[data-slot="settings.launcher"]` is the ACCOUNT
+ *     menu, and settings are one item inside it — on a phone that is the row at
+ *     the bottom of the drawer, which is the path a user actually takes.
+ *
+ * The menu path is also flaky under headless Chrome: the button is found and
+ * clicked, yet the menu never appears (measured: launcher present, `[role=menuitem]`
+ * count 0). So the keyboard shortcut the app advertises in that very menu —
+ * "设置 ⌥ ⌘ ," — is the primary path: it is a real user route, it does not depend
+ * on a portal rendering on a later tick, and it lands on the same dialog.
+ *
+ * The dialog opens on the ACCOUNT section, while our row is contributed to
+ * General, so General has to be selected before the row exists at all.
+ *
+ * Returns { ok, why } rather than throwing, so a host with none of these entry
+ * points is reported as an unmet precondition instead of a crash.
+ */
+async function openSettings(cdp, session) {
+  let via = 'shortcut'
+
+  // Alt+Meta+',' — modifiers 5 = Alt(1) | Meta(4).
+  for (const type of ['keyDown', 'keyUp']) {
+    await cdp.send('Input.dispatchKeyEvent', {
+      type, modifiers: 5, key: ',', code: 'Comma',
+      windowsVirtualKeyCode: 188, nativeVirtualKeyCode: 188,
+    }, session)
+  }
+
+  const dialogOpen = () => evaluate(cdp, session,
+    `!!document.querySelector('[role="presentation"] > [role="dialog"][aria-modal="true"]')`)
+
+  let opened = false
+  for (let i = 0; i < 16 && !opened; i += 1) {
+    await sleep(150)
+    opened = await dialogOpen()
+  }
+
+  if (!opened) {
+    // Fall back to the click paths, newest first.
+    via = await evaluate(cdp, session, `(() => {
+      const legacy = document.querySelector('[data-slot="settings.trigger"]')
+      if (legacy) { (legacy.querySelector('button') || legacy).click(); return 'legacy-trigger' }
+      // Query the BUTTON first. A selector list is matched in document order,
+      // not by specificity, so '[data-slot="settings.launcher"] button,
+      // [data-slot="settings.launcher"]' resolves to the outer display:contents
+      // wrapper (0x0) and the click never reaches anything that handles it.
+      const host = document.querySelector('[data-slot="settings.launcher"]')
+      const button = host && host.querySelector('button')
+      if (!button) return null
+      button.click()
+      return 'account-menu'
+    })()`)
+    if (!via) return { ok: false, why: 'no settings entry point in the DOM' }
+
+    await sleep(600)
+
+    if (via === 'account-menu') {
+      let picked = false
+      for (let i = 0; i < 14 && !picked; i += 1) {
+        await sleep(150)
+        picked = await evaluate(cdp, session, `(() => {
+          const item = [...document.querySelectorAll('[role=menuitem]')]
+            .find((el) => /^(设置|Settings)/.test((el.innerText || '').trim()))
+          if (!item) return false
+          item.click()
+          return true
+        })()`)
+      }
+      if (!picked) return { ok: false, why: 'no settings item in the account menu' }
+    }
+
+    for (let i = 0; i < 16 && !opened; i += 1) {
+      await sleep(150)
+      opened = await dialogOpen()
+    }
+    if (!opened) return { ok: false, why: 'settings dialog did not open (tried ' + via + ')' }
+  }
+
+  // The dialog remembers the last section; ours lives in General.
+  await evaluate(cdp, session, `(() => {
+    const nav = [...document.querySelectorAll('button,[role=tab],[role=menuitem],a')]
+      .find((el) => /^(通用设置|General)/.test((el.innerText || '').trim()))
+    if (nav) nav.click()
+    return !!nav
+  })()`)
+  await sleep(700)
+
+  return { ok: true, via }
+}
+
 // ---------------------------------------------------------------------------
 // assertions
 // ---------------------------------------------------------------------------
@@ -432,9 +526,30 @@ async function runMobile(cdp, session) {
     'viewport meta does not disable user scaling', viewport)
 
   // The host writes grid-template-columns inline; only !important beats it.
+  // Track 2 is the host-pinned centre column (grid-area 1/2), so the flexible
+  // track MUST be the middle one — see the blank-screen regression note in
+  // lib/client.js. Assert the resolved value, not just "collapsed".
   const tracks = await evaluate(cdp, session,
     `getComputedStyle(document.querySelector('[data-pocket-frame]')).gridTemplateColumns`)
-  expect(/^390px 0px 0px$/.test(tracks || ''), 'grid collapsed to a single full-width column', tracks)
+  expect(/^0px \d+px 0px$/.test(tracks || ''),
+    'only the centre track has width (sidebar and rightbar collapsed)', tracks)
+
+  // The blank-screen signature: the shell renders, the conversation area does
+  // not. Checking the centre column's width is the only assertion that catches
+  // this class of failure — nothing throws, so no console error would.
+  const centre = await evaluate(cdp, session, `(() => {
+    const frame = document.querySelector('[data-pocket-frame]')
+    const marker = document.querySelector('[data-pocket-center]')
+    if (!frame || !marker) return null
+    let el = marker
+    while (el && el.parentElement !== frame) el = el.parentElement
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { left: Math.round(r.left), width: Math.round(r.width) }
+  })()`)
+  expect(centre && centre.width >= 320,
+    'the conversation column actually has width (not the blank-screen state)',
+    JSON.stringify(centre))
 
   const closed = await evaluate(cdp, session, `(() => {
     const el = document.querySelector('[data-pocket-sidebar]')
@@ -720,19 +835,36 @@ async function runMobile(cdp, session) {
   expect(!(await evaluate(cdp, session, `document.querySelector('[data-pocket-frame]').hasAttribute('data-sidebar-collapsed')`)),
     'host sidebar was expanded so the drawer holds the real session list')
 
-  expect(await evaluate(cdp, session, `!!document.querySelector('.pocket-backdrop')`), 'backdrop present')
-
-  // The drawer must be above the backdrop, and the backdrop must be reachable.
-  const stacking = await evaluate(cdp, session, `(() => {
+  // Exactly one dim layer, and it must be reachable.
+  //
+  // Host 0.2.2 renders its own `[data-sidebar-mask]` inside the frame at z-index
+  // 70, one below its drawer at 71. Our overlay contribution sits at z-index 20,
+  // so when both existed ours could never receive the dismissing tap — it was a
+  // second dim layer under the host's, plus a dead click handler. The plugin now
+  // defers to the host's mask wherever one exists, so the assertion is about the
+  // delegation: one layer, whichever it is, above nothing and below the drawer.
+  const dim = await evaluate(cdp, session, `(() => {
+    const hostMask = document.querySelector('[data-sidebar-mask]')
+    const mine = document.querySelector('.pocket-backdrop')
     const drawer = document.querySelector('[data-pocket-sidebar]')
-    const back = document.querySelector('.pocket-backdrop')
-    const r = back.getBoundingClientRect()
+    const layer = hostMask || mine
+    if (!layer) return { none: true }
+    const r = layer.getBoundingClientRect()
     const hit = document.elementFromPoint(r.right - 8, r.top + 40)
-    return { drawerZ: +getComputedStyle(drawer).zIndex, backZ: +getComputedStyle(back).zIndex,
-             backHits: !!(hit && hit.closest('.pocket-backdrop')) }
+    return {
+      host: !!hostMask,
+      mine: !!mine,
+      drawerZ: +getComputedStyle(drawer).zIndex,
+      layerZ: +getComputedStyle(layer).zIndex,
+      hits: !!(hit && (hit === layer || layer.contains(hit) || hit.closest('.pocket-backdrop'))),
+      top: hit ? hit.tagName.toLowerCase() : null,
+    }
   })()`)
-  expect(stacking.drawerZ > stacking.backZ, 'drawer stacks above the backdrop', JSON.stringify(stacking))
-  expect(stacking.backHits, 'backdrop is hit-testable outside the drawer', JSON.stringify(stacking))
+  expect(!(dim.host && dim.mine), 'exactly one dim layer (the host supplies its own)',
+    JSON.stringify(dim))
+  expect(!dim.none, 'a dim layer covers the page outside the drawer', JSON.stringify(dim))
+  expect(dim.drawerZ > dim.layerZ, 'drawer stacks above the dim layer', JSON.stringify(dim))
+  expect(dim.hits, 'the dim layer is hit-testable outside the drawer', JSON.stringify(dim))
 
   // -- tapping inside the panel must not close it ---------------------------
   // The workspace panel is a tree of [role="treeitem"] rows. An earlier cut
@@ -821,16 +953,24 @@ async function runMobile(cdp, session) {
     `document.querySelector('[data-pocket-frame]').hasAttribute('data-sidebar-collapsed')`)),
     'reopening asks the host to expand the sidebar again')
 
-  // -- close via backdrop ---------------------------------------------------
+  // -- close via the dim layer ----------------------------------------------
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
-    'drawer is open before the backdrop click (guards a vacuous pass)')
+    'drawer is open before the dismiss tap (guards a vacuous pass)')
 
-  // Click near the right edge: the backdrop's centre is legitimately covered by
-  // the drawer, which is exactly the part of the screen a user can tap to close.
-  await clickElement(cdp, session, '.pocket-backdrop', 0.95, 0.5)
-  await sleep(500)
+  // Tap near the right edge: the layer's centre is legitimately covered by the
+  // drawer, which is exactly the part of the screen a user can tap to close.
+  // The layer is the host's mask when it has one, ours otherwise.
+  const dismissAt = await evaluate(cdp, session, `(() => {
+    const layer = document.querySelector('[data-sidebar-mask]') || document.querySelector('.pocket-backdrop')
+    if (!layer) return null
+    const r = layer.getBoundingClientRect()
+    return { x: Math.round(r.right - 8), y: Math.round(r.top + 40) }
+  })()`)
+  expect(!!dismissAt, 'a dismiss target exists outside the drawer', JSON.stringify(dismissAt))
+  if (dismissAt) await clickPoint(cdp, session, dismissAt.x, dismissAt.y, '[data-sidebar-mask], .pocket-backdrop')
+  await sleep(600)
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), null,
-    'clicking the backdrop closes the drawer')
+    'tapping outside the drawer closes it')
 
   const reclosed = await evaluate(cdp, session, `Math.round(document.querySelector('[data-pocket-sidebar]').getBoundingClientRect().right)`)
   expect(reclosed <= 1, 'drawer returned off-screen', String(reclosed))
@@ -844,15 +984,10 @@ async function runMobile(cdp, session) {
   expectEqual(await evaluate(cdp, session, `document.documentElement.getAttribute('data-pocket-drawer')`), 'open',
     'the toggle works repeatedly (drawer reopened)')
 
-  const sheet = await evaluate(cdp, session, `(() => {
-    const trigger = document.querySelector('[data-slot="settings.trigger"] button, [data-slot="settings.trigger"]')
-    if (!trigger) return { skipped: 'no settings trigger' }
-    trigger.click()
-    return { clicked: true }
-  })()`)
+  const sheet = await openSettings(cdp, session)
 
-  if (sheet.skipped) {
-    record(false, 'settings dialog reachable', sheet.skipped)
+  if (!sheet.ok) {
+    record(false, 'settings dialog reachable', sheet.why)
   } else {
     await sleep(900)
     const panel = await evaluate(cdp, session, `(() => {
@@ -995,12 +1130,7 @@ async function runDesktop(cdp, session, { label, width, height }) {
   // native here too. Compare it against its own neighbours rather than against
   // hardcoded numbers: consistency with the surrounding rows is the requirement,
   // and this stays honest if the host restyles its list.
-  await evaluate(cdp, session, `(() => {
-    const t = document.querySelector('[data-slot="settings.trigger"] button, [data-slot="settings.trigger"]')
-    if (t) t.click()
-    return !!t
-  })()`)
-  await sleep(900)
+  const settingsOpen = await openSettings(cdp, session)
 
   const rows = await evaluate(cdp, session, `(() => {
     const anchors = [...document.querySelectorAll('[data-slot="settings.general.item"]')]
@@ -1031,7 +1161,8 @@ async function runDesktop(cdp, session, { label, width, height }) {
   })()`)
 
   if (!rows.found) {
-    record(false, 'settings row present on desktop', 'no .pocket-row found in the settings list')
+    record(false, 'settings row present on desktop',
+      'no .pocket-row found in the settings list (openSettings: ' + JSON.stringify(settingsOpen) + ')')
   } else {
     expect(rows.mine.display === 'flex',
       'settings row is laid out as a row on desktop', JSON.stringify(rows.mine))

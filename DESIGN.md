@@ -76,8 +76,10 @@ react  react/jsx-runtime  react-dom  react-dom/client
 
 三个关键事实：
 - **`grid-template-columns` 是 React 内联样式** → 任何覆盖都要 `!important`。
-- **侧栏就是第一个网格轨道** → 做抽屉 = 把轨道压成 0 + 把 `sidebarCol` 改成绝对定位滑出。
+- **每个列都被 `grid-area` 钉死在固定轨道上**（sidebar `1/1`、center `1/2`、rightbar `1/3`）→ 折叠时**不能**靠自动流，`1fr` 必须留在第 2 轨，即 `0 1fr 0`。写成 `1fr 0 0` 会把宽度给空的第 1 轨、把主列钉死在 0 宽的第 2 轨 —— 整页只剩外壳，0.2.2-rc.1 上就是这么白屏的（见 §8.x）。
 - **浮层容器 `z-index:20`** → 抽屉给它 `z-index:30` 就能盖在遮罩之上。
+
+> **宿主 0.2.2 起自带了移动端抽屉**：`viewport < 768` 时 frame 会带上 `data-sidebar-drawer`，`sidebarCol` 变成 `grid-area:auto; position:absolute; inset:0 auto 0 0`，用 `transform: translate(-100%)` 收起、`data-sidebar-collapsed` 表示状态，并渲染自己的 `[data-sidebar-mask]` 遮罩与 header 左侧开关。本插件在 <768 区间的侧栏/抽屉行为与它**重叠**：插件继续用自己的 `data-pocket-drawer` 和绝对定位，但 `left` 会被宿主更高特异性的 `inset` 覆盖，实际移动由宿主的 `transform` 完成 —— 目前两者状态能对上（点插件把手，宿主的 `data-sidebar-collapsed` 会跟着翻转），属于**两份机制协同**而非一份。若后续要收窄插件职责，这里是首要候选。
 
 ### 1.4 已有的设计令牌（覆写令牌 > 逐条打架）
 
@@ -162,7 +164,7 @@ const MOBILE_QUERY = '(max-width: 1023px) and (pointer: coarse)'
 
 ```css
 html[data-pocket="on"] [data-pocket-frame] {
-  grid-template-columns: minmax(0, 1fr) 0 0 !important;   /* 压掉侧栏与右栏轨道 */
+  grid-template-columns: 0 minmax(0, 1fr) 0 !important;   /* 压掉侧栏与右栏轨道，1fr 留在中间 */
 }
 html[data-pocket="on"] [data-pocket-sidebar] {
   position: absolute;
