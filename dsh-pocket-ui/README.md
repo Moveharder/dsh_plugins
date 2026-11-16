@@ -113,6 +113,17 @@ dsh plugin --profile web add dsh-pocket-ui
 
 装完**重启 `dsh web`** 生效。
 
+> **刚发布 24 小时内安装，会静默装上旧版本**。pnpm 11 起 `minimumReleaseAge` 默认 **1440 分钟**，
+> `add dsh-pocket-ui` 会在满足 semver 的候选里挑「最新的**够老**版本」——**命令是成功的**，装上的却可能是上一个版本。
+> 想立刻用上刚发布的版本，在 profile 的 `pnpm-workspace.yaml` 里放行（按包名即可，不必逐版本写）：
+>
+> ```yaml
+> minimumReleaseAgeExclude:
+>   - dsh-pocket-ui
+> ```
+>
+> 完整来龙去脉见下面 v0.1.7 条目。
+
 本地开发：
 
 ```sh
@@ -181,6 +192,8 @@ dsh plugin --profile web remove dsh-pocket-ui
 
 - [ ] `[data-shell-overlay]` 仍存在，且仍是 AppFrame 的直接子元素
 - [ ] AppFrame 仍用**内联** `grid-template-columns`（我们的覆盖依赖 `!important`）
+- [ ] **三列的轨道顺序没变**：center 仍钉在**第 2 轨**（`grid-area: 1/2`），所以折叠模板必须是 `0 1fr 0`。若宿主改了顺序，必须同步改这条规则——写错的表现是**整页空白**而不是报错（0.2.2-rc.1 就是这样白屏的）
+- [ ] `viewport < 768` 时 frame 是否仍带 `data-sidebar-drawer`（宿主自带抽屉，与我们的抽屉重叠，见 DESIGN.md §1.3）
 - [ ] `[data-slot="sidebar"|"main"|"rightbar"]` 仍存在（槽位出口是 `display:contents`，我们选它的**父元素**）
 - [ ] 设置对话框仍是 `[role="presentation"] > [role="dialog"][aria-modal="true"]`
 - [ ] `SIDEBAR_AUTO_COLLAPSE` 仍是 1024（决定我们的断点）
@@ -188,7 +201,7 @@ dsh plugin --profile web remove dsh-pocket-ui
 
 **不使用任何宿主 class 名**——它们是内容哈希（`pI_x6G_frame`、`wSkVaW_header`），每次宿主构建都会变，选择器会静默失配。这条由冒烟测试断言。
 
-已对 0.2.0-rc.2 核对过、**没有变化**的项（逐条读过安装树里的源码/文档）：
+已对 0.2.0-rc.2 与 0.2.2-rc.1 核对过、**没有变化**的项（逐条读过安装树里的源码/文档）：
 
 - 槽位键 `sidebar` / `main` / `rightbar` / `shell.overlay` 仍在（0.2.0 新增 `shell.leading`，是 macOS 桌面壳的窗口位，与本插件无关）
 - 槽位出口仍是 `<div data-slot="<key>" style="display:contents">`
@@ -199,9 +212,9 @@ dsh plugin --profile web remove dsh-pocket-ui
 ## 验证
 
 ```sh
-npm run smoke                    # 四套全跑（103 项，全离线）
+npm run smoke                    # 四套全跑（104 项，全离线）
 node scripts/smoke-host.js       # 20 项：路由 + 探针脚本 + 在线升级全链路 + link 安装的 profile 定位 + manifest 自洽性 + 进程落后于磁盘
-node scripts/smoke-client.js     # 52 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析、stale 行的优先级、把手落位的走道算术
+node scripts/smoke-client.js     # 53 项：bundle 契约、样式表不变量、安全区夹紧算术、host 路由解析、stale 行的优先级、把手落位的走道算术
 node scripts/smoke-mount.js      # 16 项：客户端半区真正挂到桩 DOM 上，含 teardown 不残留、按页面 base 发请求
 node scripts/smoke-probe.js      # 15 项：探针本身（含"读的是插件自己的判定"、探针与 bundle 解析一致）
 node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screenshot ./shots
@@ -215,10 +228,10 @@ node scripts/verify-cdp.mjs --url '<dsh web 打印的带 token URL>' --screensho
 
 - **smoke-\*（无浏览器）** 管*契约*：bundle 形状、样式表结构不变量、安全区夹紧的算术、teardown 是否归还宿主 DOM。
   也正因如此，桩必须让"桩自己的 bug"能被看见——本仓库在这里连踩三次（`findFrame()` 拿不到 `[data-shell-overlay]`、`querySelectorAll` 不认识逗号列表、桩 `document` 没有 `baseURI`），三次现象都长得像插件坏了，实际是桩不忠实。
-- **CDP 探针（95 项断言）** 管*真实 DOM*：计算后几何、层叠顺序、可点性——只有真浏览器能验证这些。
+- **CDP 探针（98 项断言）** 管*真实 DOM*：计算后几何、层叠顺序、可点性——只有真浏览器能验证这些。
   每个阶段（移动端 / 窄桌面 / 桌面）独立捕获异常，一处失败不会掩盖后面的阶段。
 
-> 当前 93/95 通过。唯二两条失败是设置行的 `gap` 与邻行不一致（`mine=8px neighbour=normal`）——**v0.1.4 起就存在**，
+> 当前 96/98 通过。唯二两条失败是设置行的 `gap` 与邻行不一致（`mine=8px neighbour=normal`）——**v0.1.4 起就存在**，
 > 与把手落位无关，也没有随本次改动变化；它是已知的视觉细节，没有假装成"全绿"。
 
 CDP 覆盖：
@@ -242,6 +255,16 @@ CDP 覆盖：
 > 属视觉细节，未改；CDP 里仍会报出来。
 
 ## 更新记录
+
+### v0.1.10
+
+主题是**适配宿主 0.2.2-rc.1：主界面白屏，以及由此暴露的两处与宿主新移动端机制的重叠**。
+
+- **白屏的根因是网格轨道顺序，不是报错**。0.2.2 起宿主用 `grid-area` 把三列钉死在固定轨道上（侧栏 `1/1`、主列 `1/2`、右栏 `1/3`），不再靠自动流。插件原来的折叠模板是 `minmax(0,1fr) 0 0`——那是在侧栏还是自动流布局时写的，把侧栏改成绝对定位后主列会自己流进第 1 轨。宿主动了之后，`1fr` 落在了空的第 1 轨，主列被钉在宽度为 0 的第 2 轨：外壳、页头、贴边把手都正常渲染，会话区实测宽度**正好 0px**。不抛异常、不打日志，所以离线测试全绿也发现不了——这条是布局契约，不是错误路径。现在改为 `0 minmax(0,1fr) 0`，只压外侧两条轨道、把弹性轨道留在中间。
+- **新增一条断言专门盯这个症状**：CDP 探针会直接量主内容列的宽度（≥320px），因为"外壳在、内容不在"这件事没有任何异常可以捕获。客户端冒烟加了一条静态断言：折叠模板必须恰好三轨、`1fr` 必须落在第 2 轨、外侧两轨必须为 0。
+- **宿主 0.2.2 自带了移动端抽屉**（`viewport < 768` 时 frame 带 `data-sidebar-drawer`，侧栏变绝对定位、用自己的 `transform` 收放，还渲染自己的 `[data-sidebar-mask]` 遮罩和页头开关）。于是插件那层遮罩变成了死代码：它挂在 `shell.overlay`（z-index 20），而宿主的遮罩在 z-index 70，永远收不到"点空白处关闭"的那一下，视觉上还是第二层暗色。现在**宿主有遮罩时不再渲染自己的**——实测点宿主遮罩会收起宿主侧栏，插件的抽屉状态经 `syncDrawerWithHost` 跟着关闭，行为与我们要实现的完全一致。
+- **CDP 探针的打开设置路径全部重写**。0.2.2 移走了 `[data-slot="settings.trigger"]`：设置现在藏在**账号菜单**（`[data-slot="settings.launcher"]`）里，且对话框默认停在"账号与余额"，而插件那一行贡献在"通用设置"。探针改为优先用界面自己标注的快捷键 `⌥⌘,`，再兜底点账号菜单，最后切到通用设置。顺带修掉一个会把点击吞掉的坑：选择器列表 `'[data-slot=x] button, [data-slot=x]'` 按**文档顺序**匹配，外层 `display:contents` 包装（0×0）先命中，按钮根本收不到点击——必须先取包装再 `.querySelector('button')`。
+- 测试：离线 103 → **104 项**（client 52 → 53）；CDP 95 → **98 项断言**，96/98 通过，唯二失败仍是 v0.1.4 起就存在的设置行 `gap` 视觉差异（`mine=8px neighbour=normal`），与本次改动无关。
 
 ### v0.1.9
 

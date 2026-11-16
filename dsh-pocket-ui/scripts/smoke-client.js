@@ -451,6 +451,31 @@ check('the grid override is !important (host sets it inline)', () => {
     'the host writes grid-template-columns as a React inline style')
 })
 
+check('the collapsed grid keeps the centre on the host-pinned middle track', () => {
+  // Regression guard for the 0.2.2-rc.1 blank screen. The host now pins every
+  // column: grid-area 1/1 sidebar, 1/2 centre, 1/3 rightbar. Auto-placement no
+  // longer applies, so collapsing to '1fr 0 0' puts the width in an empty first
+  // track and strands the centre — which is pinned to track 2 — at 0px wide.
+  // The app then renders its shell and nothing else. Nothing throws, so this
+  // assertion is the only thing standing between that edit and a blank phone.
+  const rule = css.match(/html\[data-pocket="on"\] \[data-pocket-frame\] \{[^}]*\}/)
+  assert.ok(rule, 'frame rule present')
+  const decl = rule[0].match(/grid-template-columns:\s*([^;]+);/)
+  assert.ok(decl, 'grid-template-columns declared')
+
+  const tracks = splitTopLevel(decl[1].replace(/!important/g, '').trim())
+  assert.equal(tracks.length, 3, 'the host grid has exactly three tracks, got ' + JSON.stringify(tracks))
+
+  const flexible = tracks.map((t, i) => (/1fr/.test(t) ? i : -1)).filter((i) => i !== -1)
+  assert.deepEqual(flexible, [1],
+    'the 1fr must sit on track 2 (the host-pinned centre), not track 1: ' + JSON.stringify(tracks))
+
+  for (const i of [0, 2]) {
+    assert.equal(resolvePx(tracks[i]), 0,
+      'outer track ' + (i + 1) + ' must collapse to zero, got ' + tracks[i])
+  }
+})
+
 check('the drawer never becomes a containing block for fixed descendants', () => {
   // The host renders the settings dialog inline inside the sidebar subtree with
   // `position: fixed; inset: 0`. Any transform on the drawer — including
