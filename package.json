@@ -1,0 +1,64 @@
+{
+  "name": "dsh-reply-reader",
+  "version": "0.2.0",
+  "description": "DSH Reply Reader（朗读）— 用浏览器内置的 Web Speech API 朗读助手回复：左侧栏「朗读」面板可调语音/语速/自动朗读，每条回复旁有朗读按钮，对话里可随时暂停/继续/停止；自动朗读默认开启，免费、无需账号、不联网合成。Read assistant replies aloud with the free system speech engine, with pause and resume in the conversation.",
+  "author": "Moveharder",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "scripts": {
+    "smoke": "node scripts/smoke-host.js && node scripts/smoke-client.js && node scripts/smoke-speech.js",
+    "smoke:host": "node scripts/smoke-host.js",
+    "smoke:client": "node scripts/smoke-client.js",
+    "smoke:speech": "node scripts/smoke-speech.js"
+  },
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "dsh-plugin",
+    "tts",
+    "speech",
+    "read-aloud",
+    "accessibility",
+    "web"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Moveharder/dsh_plugins.git"
+  },
+  "homepage": "https://github.com/Moveharder/dsh_plugins",
+  "bugs": {
+    "url": "https://github.com/Moveharder/dsh_plugins/issues"
+  }
+}
