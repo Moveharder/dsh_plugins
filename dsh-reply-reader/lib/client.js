@@ -1144,7 +1144,8 @@ window.__ModuleLoader__.load({
 .dsh-ra-button{height:32px;padding:0 14px;border-radius:var(--dsw-radius-md,8px);border:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:13px;line-height:20px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
 .dsh-ra-button:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2)}
 .dsh-ra-button:disabled{opacity:.5;cursor:default}
-.dsh-ra-button[data-primary]{background:var(--dsw-alias-brand-primary);border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}
+.dsh-ra-button[data-primary]{background:var(--dsw-alias-button-primary-fill,var(--dsw-alias-brand-primary));border-color:transparent;color:var(--dsw-alias-label-primary-foreground,#fff)}
+.dsh-ra-button[data-primary]:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover,var(--dsw-alias-brand-primary))}
 .dsh-ra-button svg{flex:none}
 .dsh-ra-status{color:var(--dsw-alias-label-tertiary);font-size:12.5px;line-height:18px}
 .dsh-ra-note{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;margin:0 0 6px}

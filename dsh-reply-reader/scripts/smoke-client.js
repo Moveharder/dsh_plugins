@@ -61,6 +61,11 @@ const classNames = [...css.matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1])
 assert(classNames.length > 5 && classNames.every((name) => name.startsWith('dsh-ra-')), '样式 class 统一 dsh-ra- 前缀（' + classNames.length + ' 个）')
 assert(!css.includes('!important'), '样式不使用 !important')
 assert(css.includes('var(--dsw-alias-'), '样式使用宿主主题 token')
+// 回归点：通用 hover 规则的选择器权重是 (0,3,0)，会压过 [data-primary] 的 (0,2,0)，
+// 把白字主按钮刷成浅底白字（0.2.0 发出去的那个「悬停变空白」）。主按钮必须有自己
+// 的 hover 规则，且权重高于通用规则。
+assert(css.includes('.dsh-ra-button[data-primary]:hover:not(:disabled)'), '主按钮有独立的 hover 规则，不被通用浅底覆盖')
+assert(css.includes('var(--dsw-alias-button-primary-hover'), '主按钮 hover 用设计系统的实心主按钮色')
 
 console.log('\n[copy]')
 const enStart = SRC.indexOf('en: {')
