@@ -1,6 +1,6 @@
 {
   "name": "dsh-reply-reader",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH Reply Reader（朗读）— 用浏览器内置的 Web Speech API 朗读助手回复：左侧栏「朗读」面板可调语音/语速/自动朗读，每条回复旁有朗读按钮，对话里可随时暂停/继续/停止；自动朗读默认开启，免费、无需账号、不联网合成。Read assistant replies aloud with the free system speech engine, with pause and resume in the conversation.",
   "author": "Moveharder",
   "type": "module",
